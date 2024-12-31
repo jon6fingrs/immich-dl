@@ -12,6 +12,7 @@ Immich Downloader is a flexible script to download images from an Immich server.
 - Safety checks for the download directory.
 - Configurable via YAML, environment variables, or command-line flags.
 - Log rotation for efficient debugging.
+- Asyncio and multithreading for a significant speed improvement
 
 ---
 
