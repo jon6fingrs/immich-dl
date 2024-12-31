@@ -32,6 +32,10 @@ album_ids: []
 # If not specified, this filter is not applied.
 min_megapixels: 2.0
 
+# Minimum dimensions for images
+min_width: 1024      # Set to null or remove this line to disable the width check
+min_height: 768      # Set to null or remove this line to disable the height check
+
 # Screenshot dimensions to exclude
 # Alternative: SCREENSHOT_DIMENSIONS environment variable (as a JSON-encoded array of [width, height] pairs)
 # Example: SCREENSHOT_DIMENSIONS='[[1170, 2532], [1920, 1080]]'
@@ -61,6 +65,9 @@ disable_safety_check: false
 # even if the marker file is missing.
 # Useful for ad-hoc operations without changing the permanent safety check setting.
 override: false
+
+# Enable or disable HEIC to JPEG conversion
+enable_heic_conversion: true
 
 # Notes:
 # - If both `disable_safety_check` and `override` are set to true, the script will ignore all directory safety mechanisms.
