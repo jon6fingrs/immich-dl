@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+#    image: thehelpfulidiot/immich-dl:latest
     container_name: immich_downloader
     environment:
       IMMICH_URL: "http://10.0.0.181:2283"
@@ -13,11 +14,13 @@ services:
       PERSON_IDS: '["e130cdde-9c51-422a-bc79-965f0c72dd96", "1fa9bf6b-9088-4782-bf95-a860bc6921ef"]'
       ALBUM_IDS: '[]'
       MIN_MEGAPIXELS: 2.0
+      MIN_WIDTH: 1000
+      MIN_HEIGHT: 800
       SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]'
       OVERRIDE: "true"
       DISABLE_SAFETY_CHECK: "false"
       MAX_PARALLEL_DOWNLOADS: 5
       DRY_RUN: "false"
+      ENABLE_HEIC_CONVERSION: "true"
     volumes:
       - ./downloads:/downloads
-    restart: unless-stopped
