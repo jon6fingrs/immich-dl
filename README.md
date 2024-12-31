@@ -5,6 +5,12 @@ Immich Downloader is a flexible script to download images from an Immich server.
 
 ---
 
+## Why?
+
+My entertainment center is run on a kodi box. I have wanted for a long time to set up a screensaver that would show photos of my family from my Immich library, taking advantage of its awesome facial recognition. I have been using Immich Kiosk on tablets which does this very well, but could not get it or anything like it setup as a screensaver on Kodi. Kodi does have a built in picture slideshow screensaver, however, which can be pointed at a local folder. I needed a way to import photos to that folder per person or album. That is the purpose of this script. I did not want to download every photo available to avoid A) using up disk space and B) because I want the most recent photos to seamlessly be inserted into the slideshow. Hence, this script. I have it set up to run every few hours and to download 200 photos at random. Those photos are seen from the slideshow and after another few hours theres a different set with as much a chance of seeing a recent photo as a very old one. That is why the script is not intended to perfectly mirror a person id or album id and why the old photos are deleted with each run. I am sure there could be other uses for this script, but this is why I created it and it has so far worked very well for me.
+
+---
+
 ## Features
 
 - Download images by **person ID**, **album ID**, or from the general pool.
