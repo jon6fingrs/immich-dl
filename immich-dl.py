@@ -41,12 +41,12 @@ def load_config(config_file="config.yaml"):
         config["album_ids"] = json.loads(
             os.getenv("ALBUM_IDS", json.dumps(config.get("album_ids", [])))
         )
-        config["min_megapixels"] = float(
-            os.getenv("MIN_MEGAPIXELS", config.get("min_megapixels", 0))
-        )
+        config["min_megapixels"] = float(os.getenv("MIN_MEGAPIXELS")) if "MIN_MEGAPIXELS" in os.environ else config.get("min_megapixels")
         config["screenshot_dimensions"] = json.loads(
             os.getenv("SCREENSHOT_DIMENSIONS", json.dumps(config.get("screenshot_dimensions", [])))
         )
+        config["min_width"] = int(os.getenv("MIN_WIDTH")) if "MIN_WIDTH" in os.environ else config.get("min_width")
+        config["min_height"] = int(os.getenv("MIN_HEIGHT")) if "MIN_HEIGHT" in os.environ else config.get("min_height")
         config["override"] = os.getenv("OVERRIDE", str(config.get("override", False))).lower() in ["true", "1"]
         config["disable_safety_check"] = os.getenv("DISABLE_SAFETY_CHECK", str(config.get("disable_safety_check", False))).lower() in ["true", "1"]
         config["max_parallel_downloads"] = int(
@@ -65,9 +65,6 @@ def load_config(config_file="config.yaml"):
     except (yaml.YAMLError, ValueError, json.JSONDecodeError) as e:
         logging.error(f"Error parsing config file or environment variables: {e}")
         raise
-
-
-
 
 
 def setup_logging():
@@ -92,7 +89,6 @@ def setup_logging():
     )
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(file_handler)
-
 
 # ------------------------------
 # 2. Directory Management
@@ -256,24 +252,24 @@ async def download_from_pages_async(endpoint, total_assets, total_images, output
                 pages = pages[max_parallel_downloads:]  # Remove processed pages
 
     return downloaded
-
+    
 # ------------------------------
 # 4. Image Validation and Processing
 # ------------------------------
 
-
 def process_and_validate_image(file_path, config):
     try:
-        # Check if the file is a HEIC image
+        # Check if the file is a HEIC image and convert if needed
         if file_path.lower().endswith(".heic") and config.get("enable_heic_conversion", True):
             jpg_path = file_path.rsplit(".", 1)[0] + ".jpg"
             if not convert_heic_to_jpg(file_path, jpg_path):
                 return False
             file_path = jpg_path  # Update file path to the new JPEG file
+
         with Image.open(file_path) as img:
+            # Get initial dimensions and megapixels before rotation
             width, height = img.size
             megapixels = (width * height) / 1_000_000
-            aspect_ratio = width / height if height != 0 else 0
 
             # Check if the image matches screenshot dimensions and lacks camera EXIF data
             if config.get("screenshot_dimensions"):
@@ -284,13 +280,7 @@ def process_and_validate_image(file_path, config):
                         os.remove(file_path)
                         return False
 
-            # Check conditions
-            if config.get("min_width") and width < config["min_width"]:
-                os.remove(file_path)
-                return False
-            if config.get("min_height") and height < config["min_height"]:
-                os.remove(file_path)
-                return False
+            # Check minimum megapixels
             if config.get("min_megapixels") and megapixels < config["min_megapixels"]:
                 os.remove(file_path)
                 return False
@@ -306,7 +296,20 @@ def process_and_validate_image(file_path, config):
                 elif orientation == 8:
                     img = img.rotate(90, expand=True)
 
+            # Save the rotated image
             img.save(file_path)
+
+            # Get updated dimensions after rotation
+            width, height = img.size
+
+            # Apply minimum width and height checks
+            if config.get("min_width") and width < config["min_width"]:
+                os.remove(file_path)
+                return False
+            if config.get("min_height") and height < config["min_height"]:
+                os.remove(file_path)
+                return False
+
         return True
     except Exception as e:
         logging.error(f"Error processing image {file_path}: {e}")
@@ -329,7 +332,6 @@ def convert_heic_to_jpg(heic_path, jpg_path):
     except Exception as e:
         logging.error(f"Error during HEIC to JPEG conversion for {heic_path}: {e}")
         return False
-
 
 # ------------------------------
 # 5. Downloading and Saving
@@ -364,8 +366,6 @@ async def download_and_validate_async(asset, output_dir, config):
 # ------------------------------
 # 6. Main Execution
 # ------------------------------
-
-
 
 async def main_async():
     global CONFIG
@@ -434,20 +434,5 @@ async def main_async():
             )
             logging.info(f"Downloaded {downloaded} images for album ID {album_id}.")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 if __name__ == "__main__":
     asyncio.run(main_async())
-
