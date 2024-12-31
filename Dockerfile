@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     libjpeg-dev \
     zlib1g-dev \
+    libheif-examples \  # Add HEIF conversion tools
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install
