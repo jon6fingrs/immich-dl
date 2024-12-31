@@ -1,7 +1,7 @@
 
 # Immich Downloader
 
-Immich Downloader is a flexible script to download images from an Immich server. It allows users to specify configurations via YAML, environment variables, or command-line arguments. The script supports validation, safety checks, and can be run on bare metal or as a Docker container.
+Immich Downloader is a flexible script to download images from an Immich server. It allows users to specify configurations via YAML, environment variables, or command-line arguments. The script supports validation, safety checks, and can be run on bare metal or as a Docker container. You likely need to set up someway to schedule this.
 
 ---
 
@@ -14,7 +14,7 @@ My entertainment center is run on a kodi box. I have wanted for a long time to s
 ## Features
 
 - Download images by **person ID**, **album ID**, or from the general pool.
-- Validate downloaded images for resolution, aspect ratio, and avoid single-color images.
+- Validate downloaded images for resolution, aspect ratio, screenshots
 - Safety checks for the download directory.
 - Configurable via YAML, environment variables, or command-line flags.
 - Log rotation for efficient debugging.
@@ -66,12 +66,14 @@ docker run --rm \
   -e PERSON_IDS='["person-id-1", "person-id-2"]' \
   -e ALBUM_IDS='["album-id-1", "album-id-2"]' \
   -e MIN_MEGAPIXELS=2.0 \
+  -e MIN_WIDTH=1000 \
+  -e MIN_HEIGHT=800 \
   -e SCREENSHOT_DIMENSIONS='[[1170, 2532], [1920, 1080]]' \
   -e MAX_PARALLEL_DOWNLOADS=5 \
   -e OVERRIDE=true \
   -e DISABLE_SAFETY_CHECK=false \
   -e DRY_RUN=false \
-  -e ENABLE_HEIC_CONVERSION=true
+  -e ENABLE_HEIC_CONVERSION=true \
   -v ./downloads:/downloads \
   thehelpfulidiot/immich-dl:latest
 ```
@@ -91,7 +93,9 @@ services:
       TOTAL_IMAGES_TO_DOWNLOAD: "5"
       PERSON_IDS: '["person-id-1", "person-id-2"]'
       ALBUM_IDS: '["album-id-1", "album-id-2"]'
-      MIN_MEGAPIXELS: "2.0"
+      MIN_MEGAPIXELS: "2.0" #optional, no default
+      MIN_WIDTH: 1000 #optional, no default
+      MIN_HEIGHT: 800 #optional, no default
       SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]'
       MAX_PARALLEL_DOWNLOADS: "5"
       OVERRIDE: "true"
@@ -139,6 +143,8 @@ The script supports configurations via **YAML**, **environment variables**, or *
 | Person IDs                 | `PERSON_IDS`                 | `person_ids`               | N/A                      | JSON list of person IDs.                                                                                                                                               |
 | Album IDs                  | `ALBUM_IDS`                  | `album_ids`                | N/A                      | JSON list of album IDs.                                                                                                                                                |
 | Minimum Megapixels         | `MIN_MEGAPIXELS`             | `min_megapixels`           | N/A                      | Minimum megapixels for images to be downloaded.                                                                                                                       |
+| Minimum Width              | `MIN_WIDTH`                  | `min_width`                | N/A                      | Minimum width for images (after orientation corrected)                                                                                                                |
+| Minimum Height             | `MIN_HEIGHT`                 | `min_height`               | N/A                      | Minimum height for images (after orientation corrected)                                                                                                               |
 | Screenshot Dimensions      | `SCREENSHOT_DIMENSIONS`      | `screenshot_dimensions`    | N/A                      | JSON list of dimensions to exclude (e.g., screenshots).                                                                                                               |
 | Max Parallel Downloads     | `MAX_PARALLEL_DOWNLOADS`     | `max_parallel_downloads`   | N/A                      | Maximum number of parallel downloads.                                                                                                                                 |
 | Disable Safety Check       | `DISABLE_SAFETY_CHECK`       | `disable_safety_check`     | N/A                      | Disable safety check for the directory marker.                                                                                                                        |
@@ -171,6 +177,10 @@ album_ids: []
 
 # Minimum megapixels for images (optional)
 min_megapixels: 2.0
+
+# Minimum dimensions for images
+min_width: 1024      # Set to null or remove this line to disable the width check
+min_height: 768      # Set to null or remove this line to disable the height check
 
 # Screenshot dimensions to exclude (optional)
 screenshot_dimensions:
