@@ -8,19 +8,19 @@ services:
 #    image: thehelpfulidiot/immich-dl:latest
     container_name: immich_downloader
     environment:
-      IMMICH_URL: "http://10.0.0.181:2283"
-      API_KEY: "b4CYMLA7mGwlKjW0P19DX4zATQnNNDlcFCUwnCrs4PA"
-      TOTAL_IMAGES_TO_DOWNLOAD: 20
-      PERSON_IDS: '["e130cdde-9c51-422a-bc79-965f0c72dd96", "1fa9bf6b-9088-4782-bf95-a860bc6921ef"]'
-      ALBUM_IDS: '[]'
-      MIN_MEGAPIXELS: 2.0
-      MIN_WIDTH: 1000
-      MIN_HEIGHT: 800
-      SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]'
-      OVERRIDE: "true"
-      DISABLE_SAFETY_CHECK: "false"
-      MAX_PARALLEL_DOWNLOADS: 5
-      DRY_RUN: "false"
-      ENABLE_HEIC_CONVERSION: "true"
+      IMMICH_URL: "immich-url" #necessary
+      API_KEY: "api-key" #necessary
+      TOTAL_IMAGES_TO_DOWNLOAD: 20 #necessary
+      PERSON_IDS: '["person-id-1", "person-id-2"]'
+      ALBUM_IDS: '["album-id-1", "album-id-2"]' #optional- will pull from whole library if album_id and person_id are blank
+      MIN_MEGAPIXELS: 2.0 #optional, no default
+      MIN_WIDTH: 1000 #optional, no default
+      MIN_HEIGHT: 800 #optional, no default
+      SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]' #optional, no default
+      OVERRIDE: "true" #default as shown
+      DISABLE_SAFETY_CHECK: "false" #default as shown
+      MAX_PARALLEL_DOWNLOADS: 5 #default as shown
+      DRY_RUN: "false" #default as shown
+      ENABLE_HEIC_CONVERSION: "true" #default as shown
     volumes:
-      - ./downloads:/downloads
+      - ./downloads:/downloads # OUTPUT_DIR set to /downloads in Dockerfile since the volume mapping is all that matters, but could be modified with env variables
