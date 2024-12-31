@@ -18,7 +18,7 @@ My entertainment center is run on a kodi box. I have wanted for a long time to s
 - Safety checks for the download directory.
 - Configurable via YAML, environment variables, or command-line flags.
 - Log rotation for efficient debugging.
-- Asyncio and multithreading for a significant speed improvement
+- Asyncio for a significant speed improvement
 
 ---
 
