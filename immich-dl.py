@@ -53,6 +53,7 @@ def load_config(config_file="config.yaml"):
             os.getenv("MAX_PARALLEL_DOWNLOADS", config.get("max_parallel_downloads", 5))
         )
         config["dry_run"] = os.getenv("DRY_RUN", str(config.get("dry_run", False))).lower() in ["true", "1"]
+        config["enable_heic_conversion"] = os.getenv("ENABLE_HEIC_CONVERSION", "true").lower() in ["true", "1"]
 
         # Validate essential keys
         if not config["immich_url"] or not config["api_key"]:
@@ -263,6 +264,12 @@ async def download_from_pages_async(endpoint, total_assets, total_images, output
 
 def process_and_validate_image(file_path, config):
     try:
+        # Check if the file is a HEIC image
+        if file_path.lower().endswith(".heic") and config.get("enable_heic_conversion", True):
+            jpg_path = file_path.rsplit(".", 1)[0] + ".jpg"
+            if not convert_heic_to_jpg(file_path, jpg_path):
+                return False
+            file_path = jpg_path  # Update file path to the new JPEG file
         with Image.open(file_path) as img:
             width, height = img.size
             megapixels = (width * height) / 1_000_000
@@ -296,6 +303,22 @@ def process_and_validate_image(file_path, config):
         logging.error(f"Error processing image {file_path}: {e}")
         if os.path.exists(file_path):
             os.remove(file_path)
+        return False
+
+def convert_heic_to_jpg(heic_path, jpg_path):
+    """
+    Converts a HEIC file to a JPEG file using an external converter like `heif-convert`.
+    """
+    try:
+        result = os.system(f"heif-convert {heic_path} {jpg_path}")
+        if result == 0:
+            os.remove(heic_path)  # Remove the original HEIC file if conversion succeeds
+            return True
+        else:
+            logging.error(f"HEIC to JPEG conversion failed for {heic_path}")
+            return False
+    except Exception as e:
+        logging.error(f"Error during HEIC to JPEG conversion for {heic_path}: {e}")
         return False
 
 
