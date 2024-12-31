@@ -1,189 +1,184 @@
+
 # Immich Downloader
 
-The **Immich Downloader** script is a utility for downloading images from an Immich instance. It supports various configuration options for filtering, validating, and managing downloaded images. The script is highly customizable and can run on bare metal or within a Docker container.
+Immich Downloader is a flexible script to download images from an Immich server. It allows users to specify configurations via YAML, environment variables, or command-line arguments. The script supports validation, safety checks, and can be run on bare metal or as a Docker container.
 
 ---
 
 ## Features
 
-- Download images from albums or people in an Immich instance.
-- Supports filters such as minimum megapixels, aspect ratio, and dimensions.
-- Detects and excludes screenshots based on specified dimensions.
-- Corrects image orientation and converts HEIC files to JPG.
-- Respects safety mechanisms to prevent unintended directory clearing.
-- Logs detailed information with built-in log rotation.
+- Download images by **person ID**, **album ID**, or from the general pool.
+- Validate downloaded images for resolution, aspect ratio, and avoid single-color images.
+- Safety checks for the download directory.
+- Configurable via YAML, environment variables, or command-line flags.
+- Log rotation for efficient debugging.
 
 ---
 
-## Table of Contents
+## Running on Bare Metal
 
-1. [Prerequisites](#prerequisites)
-2. [Configuration](#configuration)
-3. [Running the Script](#running-the-script)
-   - [On Bare Metal](#on-bare-metal)
-   - [Using Docker](#using-docker)
-4. [Environment Variables](#environment-variables)
-5. [Log Rotation](#log-rotation)
-6. [Safety Mechanisms](#safety-mechanisms)
-7. [Examples](#examples)
+1. Clone the repository:
 
----
+   ```bash
+   git clone <repository-url>
+   cd <repository-folder>
+   ```
 
-## Prerequisites
+2. Install Python dependencies:
 
-- Python 3.8 or higher
-- Dependencies: Install via `pip install -r requirements.txt`
-- Access to an Immich instance and a valid API key
-
----
-
-## Configuration
-
-The script uses a `config.yaml` file for primary configuration. All options in the YAML file can also be overridden using environment variables.
-
-### `config.yaml` Example
-```yaml
-immich_url: "http://your-immich-instance-url"
-api_key: "your-immich-api-key"
-output_dir: "/path/to/output/directory"
-total_images_to_download: 10
-person_ids: []
-album_ids: []
-min_megapixels: 2.0
-screenshot_dimensions:
-  - [1170, 2532]
-  - [1920, 1080]
-dry_run: false
-max_parallel_downloads: 5
-disable_safety_check: false
-override: false
-```
-
----
-
-## Running the Script
-
-### On Bare Metal
-
-1. **Install Dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-2. **Run the Script**:
+3. Create a configuration file `config.yaml` (see example below).
+
+4. Run the script:
+
    ```bash
    python3 immich-dl.py
    ```
 
-3. **Optional Arguments**:
-   - `--output-dir`: Specify a custom output directory.
-   - `--override`: Temporarily bypass the safety check for the current run.
-
-### Using Docker
-
-1. **Build the Docker Image**:
-   ```bash
-   docker build -t immich-downloader .
-   ```
-
-2. **Run the Container**:
-   ```bash
-   docker run --rm -v /path/to/photos:/downloads      -e IMMICH_URL=http://your-immich-instance-url      -e API_KEY=your-api-key      immich-downloader
-   ```
-
-3. **Optional Environment Variables**:
-   - See [Environment Variables](#environment-variables) for all configurable options.
-
-4. **Using Docker Compose**:
-   Create a `docker-compose.yml`:
-   ```yaml
-   version: "3.8"
-   services:
-     immich-downloader:
-       image: immich-downloader
-       environment:
-         IMMICH_URL: http://your-immich-instance-url
-         API_KEY: your-api-key
-         TOTAL_IMAGES_TO_DOWNLOAD: 10
-         OUTPUT_DIR: /downloads
-         OVERRIDE: "false"
-         DISABLE_SAFETY_CHECK: "false"
-       volumes:
-         - ./photos:/downloads
-   ```
-   Run the container:
-   ```bash
-   docker-compose up
-   ```
+5. You can override any configuration via environment variables or command-line flags.
 
 ---
 
-## Environment Variables
+## Running with Docker
 
-| Environment Variable          | Description                                          | Default (if not set)           |
-|--------------------------------|------------------------------------------------------|---------------------------------|
-| `IMMICH_URL`                   | URL of the Immich instance                           | Must be specified              |
-| `API_KEY`                      | API key for Immich authentication                   | Must be specified              |
-| `OUTPUT_DIR`                   | Directory to save downloaded images                 | Specified in `config.yaml`     |
-| `TOTAL_IMAGES_TO_DOWNLOAD`     | Number of images to download per person or album     | Specified in `config.yaml`     |
-| `PERSON_IDS`                   | List of person IDs (JSON array)                     | Specified in `config.yaml`     |
-| `ALBUM_IDS`                    | List of album IDs (JSON array)                      | Specified in `config.yaml`     |
-| `MIN_MEGAPIXELS`               | Minimum megapixels for downloaded images            | Specified in `config.yaml`     |
-| `SCREENSHOT_DIMENSIONS`        | Dimensions to exclude as screenshots (JSON array)   | Specified in `config.yaml`     |
-| `DRY_RUN`                      | Enable dry-run mode (`true` or `false`)             | `false`                        |
-| `MAX_PARALLEL_DOWNLOADS`       | Maximum number of concurrent downloads              | `5`                            |
-| `DISABLE_SAFETY_CHECK`         | Disable safety check for the output directory       | `false`                        |
-| `OVERRIDE`                     | Temporarily override safety checks for the run      | `false`                        |
+### Using the Prebuilt Docker Image
 
----
+The prebuilt image is available on Docker Hub: [thehelpfulidiot/immich-dl](https://hub.docker.com/repository/docker/thehelpfulidiot/immich-dl/general).
 
-## Log Rotation
+#### Example `docker run` Command
 
-The script automatically rotates logs to prevent excessive file sizes. By default:
-- Logs are stored in `immich_downloader.log`.
-- When the log file exceeds 5MB, it is rotated, and old logs are archived with timestamps.
+```bash
+docker run --rm \
+  -e IMMICH_URL=http://your-immich-instance-url \
+  -e API_KEY=your-api-key-here \
+  -e OUTPUT_DIR=/downloads \
+  -e TOTAL_IMAGES_TO_DOWNLOAD=5 \
+  -e PERSON_IDS='["person-id-1", "person-id-2"]' \
+  -e ALBUM_IDS='["album-id-1", "album-id-2"]' \
+  -e MIN_MEGAPIXELS=2.0 \
+  -e SCREENSHOT_DIMENSIONS='[[1170, 2532], [1920, 1080]]' \
+  -e MAX_PARALLEL_DOWNLOADS=5 \
+  -e OVERRIDE=true \
+  -e DISABLE_SAFETY_CHECK=false \
+  -e DRY_RUN=false \
+  -v ./downloads:/downloads \
+  thehelpfulidiot/immich-dl:latest
+```
 
----
+#### Example `docker-compose.yaml`
 
-## Safety Mechanisms
-
-The script includes safety features to prevent accidental deletion of directories:
-
-1. **Marker File**: A `.script_marker` file is created in the output directory.
-2. **Safety Check**:
-   - If the marker file is absent, the directory will not be cleared unless `override` is enabled.
-   - Use `disable_safety_check` to bypass this check permanently.
-
----
-
-## Examples
-
-### Download Images for Specific People
 ```yaml
-person_ids:
-  - "person-id-1"
-  - "person-id-2"
-```
-Run:
-```bash
-python3 immich-dl.py
-```
-
-### Temporarily Override Safety Checks
-```bash
-python3 immich-dl.py --override
-```
-
-### Use Environment Variables for Configuration
-```bash
-IMMICH_URL=http://your-immich-instance-url API_KEY=your-api-key TOTAL_IMAGES_TO_DOWNLOAD=5 python3 immich-dl.py
+version: "3.9"
+services:
+  immich-dl:
+    image: thehelpfulidiot/immich-dl:latest
+    container_name: immich-downloader
+    environment:
+      IMMICH_URL: "http://your-immich-instance-url"
+      API_KEY: "your-api-key-here"
+      OUTPUT_DIR: "/downloads"
+      TOTAL_IMAGES_TO_DOWNLOAD: "5"
+      PERSON_IDS: '["person-id-1", "person-id-2"]'
+      ALBUM_IDS: '["album-id-1", "album-id-2"]'
+      MIN_MEGAPIXELS: "2.0"
+      SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]'
+      MAX_PARALLEL_DOWNLOADS: "5"
+      OVERRIDE: "true"
+      DISABLE_SAFETY_CHECK: "false"
+      DRY_RUN: "false"
+    volumes:
+      - ./downloads:/downloads
 ```
 
 ---
 
-## Contributions
+## Building the Docker Image Locally
 
-Contributions are welcome! Feel free to open issues or submit pull requests to improve the script.
+1. Build the image:
+
+   ```bash
+   docker build -t immich-dl:latest .
+   ```
+
+2. Run the container:
+
+   ```bash
+   docker run --rm \
+     -e IMMICH_URL=http://10.0.0.181:2283 \
+     -e API_KEY=<your-api-key> \
+     -e PERSON_IDS='["person-id-1","person-id-2"]' \
+     -e TOTAL_IMAGES_TO_DOWNLOAD=5 \
+     -v /path/to/downloads:/downloads \
+     immich-dl:latest
+   ```
+
+---
+
+## Configuration Options
+
+The script supports configurations via **YAML**, **environment variables**, or **command-line arguments**. Below is a comprehensive table of options:
+
+| **Option**                 | **Environment Variable**      | **YAML Key**                | **Command-Line Flag**    | **Description**                                                                                                                                                             |
+|----------------------------|-------------------------------|-----------------------------|--------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Immich Server URL          | `IMMICH_URL`                 | `immich_url`               | N/A                      | Base URL of the Immich instance.                                                                                                                                       |
+| API Key                    | `API_KEY`                    | `api_key`                  | N/A                      | API key for authentication.                                                                                                                                            |
+| Output Directory           | `OUTPUT_DIR`                 | `output_dir`               | `--output-dir`           | Directory where images will be downloaded.                                                                                                                             |
+| Total Images to Download   | `TOTAL_IMAGES_TO_DOWNLOAD`   | `total_images_to_download` | N/A                      | Number of images to download per person or album.                                                                                                                      |
+| Person IDs                 | `PERSON_IDS`                 | `person_ids`               | N/A                      | JSON list of person IDs.                                                                                                                                               |
+| Album IDs                  | `ALBUM_IDS`                  | `album_ids`                | N/A                      | JSON list of album IDs.                                                                                                                                                |
+| Minimum Megapixels         | `MIN_MEGAPIXELS`             | `min_megapixels`           | N/A                      | Minimum megapixels for images to be downloaded.                                                                                                                       |
+| Screenshot Dimensions      | `SCREENSHOT_DIMENSIONS`      | `screenshot_dimensions`    | N/A                      | JSON list of dimensions to exclude (e.g., screenshots).                                                                                                               |
+| Max Parallel Downloads     | `MAX_PARALLEL_DOWNLOADS`     | `max_parallel_downloads`   | N/A                      | Maximum number of parallel downloads.                                                                                                                                 |
+| Disable Safety Check       | `DISABLE_SAFETY_CHECK`       | `disable_safety_check`     | N/A                      | Disable safety check for the directory marker.                                                                                                                        |
+| Override Safety Check      | `OVERRIDE`                  | `override`                 | `--override`             | Override safety checks for the directory.                                                                                                                             |
+| Dry Run                    | `DRY_RUN`                   | `dry_run`                  | N/A                      | Simulate downloads without saving files.                                                                                                                              |
+
+---
+
+## Configuration Example: `config.yaml`
+
+```yaml
+# URL of your Immich instance
+immich_url: "http://your-immich-instance-url"
+
+# API Key for authentication
+api_key: "your-api-key"
+
+# Directory to save downloaded images
+output_dir: "/path/to/downloads"
+
+# Number of images to download per person/album
+total_images_to_download: 10
+
+# List of Person IDs (optional)
+person_ids: []
+
+# List of Album IDs (optional)
+album_ids: []
+
+# Minimum megapixels for images (optional)
+min_megapixels: 2.0
+
+# Screenshot dimensions to exclude (optional)
+screenshot_dimensions:
+  - [1170, 2532]  # iPhone screenshot
+  - [1920, 1080]  # Desktop screenshot
+
+# Maximum parallel downloads (optional)
+max_parallel_downloads: 5
+
+# Disable safety check for the directory (optional)
+disable_safety_check: false
+
+# Override safety check for the directory (optional)
+override: false
+
+# Dry-run mode (optional)
+dry_run: false
+```
 
 ---
 
