@@ -1,0 +1,67 @@
+# Immich Downloader Configuration Example
+# Annotated with placeholders, examples, and alternative environment variable names for all options.
+
+# URL of your Immich instance
+# Alternative: IMMICH_URL environment variable
+immich_url: "http://your-immich-instance-url"
+
+# API Key for Immich authentication
+# Alternative: API_KEY environment variable
+api_key: "your-immich-api-key"
+
+# Directory to save downloaded images
+# Alternative: OUTPUT_DIR environment variable
+output_dir: "/path/to/output/directory"
+
+# Number of images to download per album or person
+# Alternative: TOTAL_IMAGES_TO_DOWNLOAD environment variable
+total_images_to_download: 10
+
+# List of person IDs to download images for
+# Alternative: PERSON_IDS environment variable (as a JSON-encoded array)
+# Example: PERSON_IDS='["person-id-1", "person-id-2"]'
+person_ids: []
+
+# List of album IDs to download images for
+# Alternative: ALBUM_IDS environment variable (as a JSON-encoded array)
+# Example: ALBUM_IDS='["album-id-1", "album-id-2"]'
+album_ids: []
+
+# Minimum megapixels for downloaded images
+# Alternative: MIN_MEGAPIXELS environment variable
+# If not specified, this filter is not applied.
+min_megapixels: 2.0
+
+# Screenshot dimensions to exclude
+# Alternative: SCREENSHOT_DIMENSIONS environment variable (as a JSON-encoded array of [width, height] pairs)
+# Example: SCREENSHOT_DIMENSIONS='[[1170, 2532], [1920, 1080]]'
+screenshot_dimensions:
+  - [1170, 2532]  # iPhone screenshot dimensions
+  - [1920, 1080]  # Common desktop screenshot dimensions
+
+# Enable dry-run mode to simulate downloads without saving any files
+# Alternative: DRY_RUN environment variable
+# Default: false
+dry_run: false
+
+# Maximum number of parallel downloads
+# Alternative: MAX_PARALLEL_DOWNLOADS environment variable
+# Default: 5
+max_parallel_downloads: 5
+
+# Disable safety check for the output directory
+# **Alternative**: DISABLE_SAFETY_CHECK environment variable
+# **Purpose**: Permanently disables checking for the marker file before clearing the directory.
+# If set to true, the script can clear directories without verifying the marker file.
+disable_safety_check: false
+
+# Override safety checks for the current run
+# **Alternative**: OVERRIDE environment variable
+# **Purpose**: Temporarily bypasses the safety check, allowing the script to clear the directory
+# even if the marker file is missing.
+# Useful for ad-hoc operations without changing the permanent safety check setting.
+override: false
+
+# Notes:
+# - If both `disable_safety_check` and `override` are set to true, the script will ignore all directory safety mechanisms.
+# - If both are set to false, the script will only operate on directories with a valid marker file.
