@@ -65,6 +65,7 @@ docker run --rm \
   -e OVERRIDE=true \
   -e DISABLE_SAFETY_CHECK=false \
   -e DRY_RUN=false \
+  -e ENABLE_HEIC_CONVERSION=true
   -v ./downloads:/downloads \
   thehelpfulidiot/immich-dl:latest
 ```
@@ -90,6 +91,7 @@ services:
       OVERRIDE: "true"
       DISABLE_SAFETY_CHECK: "false"
       DRY_RUN: "false"
+      ENABLE_HEIC_CONVERSION: "true"
     volumes:
       - ./downloads:/downloads
 ```
@@ -136,6 +138,7 @@ The script supports configurations via **YAML**, **environment variables**, or *
 | Disable Safety Check       | `DISABLE_SAFETY_CHECK`       | `disable_safety_check`     | N/A                      | Disable safety check for the directory marker.                                                                                                                        |
 | Override Safety Check      | `OVERRIDE`                  | `override`                 | `--override`             | Override safety checks for the directory.                                                                                                                             |
 | Dry Run                    | `DRY_RUN`                   | `dry_run`                  | N/A                      | Simulate downloads without saving files.                                                                                                                              |
+| Enable HEIC Conversion     | `ENABLE_HEIC_CONVERSION`    | `enable_heic_conversion`   | N/A                      | Convert HEIC to JPEG. Defaults to true.                                                                                                                               |
 
 ---
 
@@ -179,6 +182,9 @@ override: false
 
 # Dry-run mode (optional)
 dry_run: false
+
+# Convert HEIC to JPEG (optional)
+enable_heic_conversion: true
 ```
 
 ---
