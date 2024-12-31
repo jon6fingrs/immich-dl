@@ -275,6 +275,15 @@ def process_and_validate_image(file_path, config):
             megapixels = (width * height) / 1_000_000
             aspect_ratio = width / height if height != 0 else 0
 
+            # Check if the image matches screenshot dimensions and lacks camera EXIF data
+            if config.get("screenshot_dimensions"):
+                exif = img._getexif()
+                if (width, height) in [tuple(dim) for dim in config["screenshot_dimensions"]]:
+                    if not exif or not exif.get(271):  # Check for "Make" field in EXIF data
+                        logging.warning(f"Image {file_path} matches screenshot dimensions and lacks camera EXIF data. Discarding.")
+                        os.remove(file_path)
+                        return False
+
             # Check conditions
             if config.get("min_width") and width < config["min_width"]:
                 os.remove(file_path)
