@@ -179,8 +179,10 @@ def fetch_total_assets(endpoint, asset_type, id=None):
         logging.error(f"Error fetching total assets for {asset_type} ID {id}: {e}")
         return 0
 
-
-def fetch_asset_from_page(endpoint, page, size=1, additional_filters=None):
+async def fetch_asset_from_page_async(session, endpoint, page, size=1, additional_filters=None):
+    """
+    Asynchronously fetch an asset from a specific page using the /search/metadata endpoint.
+    """
     url = f"{endpoint}/api/search/metadata"
     headers = {
         "x-api-key": CONFIG["api_key"],
@@ -196,75 +198,88 @@ def fetch_asset_from_page(endpoint, page, size=1, additional_filters=None):
         payload.update(additional_filters)
 
     try:
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        if "assets" in data and "items" in data["assets"]:
-            return data["assets"]["items"]
-        else:
-            logging.warning(f"No items found on page {page}.")
-            return []
-
-    except requests.exceptions.RequestException as e:
+        async with session.post(url, json=payload, headers=headers) as response:
+            response.raise_for_status()
+            data = await response.json()
+            if "assets" in data and "items" in data["assets"]:
+                return data["assets"]["items"]
+            else:
+                logging.warning(f"No items found on page {page}.")
+                return []
+    except aiohttp.ClientError as e:
         logging.error(f"Error fetching asset from page {page}: {e}")
         return []
+
+async def download_from_pages_async(endpoint, total_assets, total_images, output_dir, additional_filters=None):
+    """
+    Asynchronously downloads images by fetching assets page by page.
+    Reverts to sequential downloading when the remaining images to download is below the concurrency limit.
+    """
+    pages = list(range(1, total_assets + 1))
+    random.shuffle(pages)
+    downloaded = 0
+    max_parallel_downloads = CONFIG.get("max_parallel_downloads", 5)
+    semaphore = Semaphore(max_parallel_downloads)
+    lock = Lock()  # Ensure thread-safe updates to the downloaded counter
+
+    async def process_page(session, page):
+        nonlocal downloaded
+        async with semaphore:  # Limit the number of concurrent tasks
+            assets = await fetch_asset_from_page_async(session, endpoint, page, size=1, additional_filters=additional_filters)
+            for asset in assets:
+                async with lock:  # Ensure only one task updates the count at a time
+                    if downloaded >= total_images:
+                        return
+                if await download_and_validate_async(asset, output_dir, CONFIG):
+                    async with lock:  # Lock again for incrementing
+                        downloaded += 1
+
+    async with aiohttp.ClientSession() as session:
+        while downloaded < total_images and pages:
+            if total_images - downloaded <= max_parallel_downloads:
+                # Sequential processing for remaining images
+                for page in pages[:total_images - downloaded]:
+                    assets = await fetch_asset_from_page_async(session, endpoint, page, size=1, additional_filters=additional_filters)
+                    for asset in assets:
+                        async with lock:
+                            if downloaded >= total_images:
+                                return downloaded
+                        if await download_and_validate_async(asset, output_dir, CONFIG):
+                            async with lock:
+                                downloaded += 1
+                    pages.pop(0)  # Remove processed page
+            else:
+                # Concurrent processing
+                tasks = [process_page(session, page) for page in pages[:max_parallel_downloads]]
+                await asyncio.gather(*tasks)
+                pages = pages[max_parallel_downloads:]  # Remove processed pages
+
+    return downloaded
 
 # ------------------------------
 # 4. Image Validation and Processing
 # ------------------------------
 
-def validate_image(file_path, config):
+
+def process_and_validate_image(file_path, config):
     try:
         with Image.open(file_path) as img:
             width, height = img.size
             megapixels = (width * height) / 1_000_000
             aspect_ratio = width / height if height != 0 else 0
 
-            # Check minimum dimensions
+            # Check conditions
             if config.get("min_width") and width < config["min_width"]:
                 os.remove(file_path)
                 return False
             if config.get("min_height") and height < config["min_height"]:
                 os.remove(file_path)
                 return False
-
-            # Check minimum megapixels
             if config.get("min_megapixels") and megapixels < config["min_megapixels"]:
                 os.remove(file_path)
                 return False
 
-            # Check allowed aspect ratios
-            if config.get("allowed_aspect_ratios"):
-                allowed_ratios = config["allowed_aspect_ratios"]
-                if not any(abs(aspect_ratio - ratio) < 0.01 for ratio in allowed_ratios):
-                    os.remove(file_path)
-                    return False
-
-            # Check screenshot dimensions
-            if config.get("screenshot_dimensions"):
-                if (width, height) in [tuple(dim) for dim in config["screenshot_dimensions"]]:
-                    os.remove(file_path)
-                    return False
-
-            # Check if the image is a single color
-            pixels = img.getdata()
-            unique_colors = set(pixels)
-            if len(unique_colors) < 2:  # Single-color images will have only one unique color
-                logging.warning(f"Image {file_path} appears to be a single color and will be discarded.")
-                os.remove(file_path)
-                return False
-
-        return True
-    except Exception as e:
-        logging.error(f"Error validating image {file_path}: {e}")
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        return False
-
-
-def process_image(file_path):
-    try:
-        with Image.open(file_path) as img:
+            # Rotate based on EXIF orientation
             exif = img._getexif()
             if exif:
                 orientation = exif.get(274)
@@ -274,36 +289,42 @@ def process_image(file_path):
                     img = img.rotate(270, expand=True)
                 elif orientation == 8:
                     img = img.rotate(90, expand=True)
+
             img.save(file_path)
         return True
     except Exception as e:
-        logging.warning(f"Error processing image {file_path}: {e}")
+        logging.error(f"Error processing image {file_path}: {e}")
         if os.path.exists(file_path):
             os.remove(file_path)
         return False
+
 
 # ------------------------------
 # 5. Downloading and Saving
 # ------------------------------
 
-def download_and_validate(asset, output_dir, config):
+async def download_and_validate_async(asset, output_dir, config):
     file_path = os.path.join(output_dir, f"{asset['id']}.jpg")
-    try:
-        url = f"{CONFIG['immich_url']}/api/assets/{asset['id']}/original"
-        headers = {"x-api-key": CONFIG["api_key"]}
-        response = requests.get(url, headers=headers, stream=True)
-        response.raise_for_status()
-        with open(file_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+    url = f"{config['immich_url']}/api/assets/{asset['id']}/original"
+    headers = {"x-api-key": config["api_key"]}
 
-        if process_image(file_path) and validate_image(file_path, config):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                async with aiofiles.open(file_path, "wb") as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        await f.write(chunk)
+
+        # Offload image processing to a separate thread
+        loop = asyncio.get_running_loop()
+        success = await loop.run_in_executor(None, process_and_validate_image, file_path, config)
+        if success:
             return file_path
         else:
             return None
-
     except Exception as e:
-        logging.error(f"Error downloading asset {asset['id']}: {e}")
+        logging.error(f"Error downloading or validating asset {asset['id']}: {e}")
         if os.path.exists(file_path):
             os.remove(file_path)
         return None
@@ -382,165 +403,18 @@ async def main_async():
             logging.info(f"Downloaded {downloaded} images for album ID {album_id}.")
 
 
-def download_from_pages(endpoint, total_assets, total_images, output_dir, additional_filters=None):
-    """
-    Handles downloading images by fetching assets page by page.
-    """
-    pages = list(range(1, total_assets + 1))
-    random.shuffle(pages)
-    downloaded = 0
-
-    while downloaded < total_images and pages:
-        page = pages.pop()  # Remove the current page from the list as it's processed
-        assets = fetch_asset_from_page(endpoint, page, size=1, additional_filters=additional_filters)
-        for asset in assets:
-            if download_and_validate(asset, output_dir, CONFIG):
-                downloaded += 1
-
-    return downloaded
 
 
 
-async def fetch_asset_from_page_async(session, endpoint, page, size=1, additional_filters=None):
-    """
-    Asynchronously fetch an asset from a specific page using the /search/metadata endpoint.
-    """
-    url = f"{endpoint}/api/search/metadata"
-    headers = {
-        "x-api-key": CONFIG["api_key"],
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "type": "IMAGE",
-        "page": page,
-        "size": size,
-    }
-
-    if additional_filters:
-        payload.update(additional_filters)
-
-    try:
-        async with session.post(url, json=payload, headers=headers) as response:
-            response.raise_for_status()
-            data = await response.json()
-            if "assets" in data and "items" in data["assets"]:
-                return data["assets"]["items"]
-            else:
-                logging.warning(f"No items found on page {page}.")
-                return []
-    except aiohttp.ClientError as e:
-        logging.error(f"Error fetching asset from page {page}: {e}")
-        return []
-
-async def download_and_validate_async(asset, output_dir, config):
-    file_path = os.path.join(output_dir, f"{asset['id']}.jpg")
-    url = f"{config['immich_url']}/api/assets/{asset['id']}/original"
-    headers = {"x-api-key": config["api_key"]}
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
-                response.raise_for_status()
-                async with aiofiles.open(file_path, "wb") as f:
-                    async for chunk in response.content.iter_chunked(8192):
-                        await f.write(chunk)
-
-        # Offload image processing to a separate thread
-        loop = asyncio.get_running_loop()
-        success = await loop.run_in_executor(None, process_and_validate_image, file_path, config)
-        if success:
-            return file_path
-        else:
-            return None
-    except Exception as e:
-        logging.error(f"Error downloading or validating asset {asset['id']}: {e}")
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        return None
-
-def process_and_validate_image(file_path, config):
-    try:
-        with Image.open(file_path) as img:
-            width, height = img.size
-            megapixels = (width * height) / 1_000_000
-            aspect_ratio = width / height if height != 0 else 0
-
-            # Check conditions
-            if config.get("min_width") and width < config["min_width"]:
-                os.remove(file_path)
-                return False
-            if config.get("min_height") and height < config["min_height"]:
-                os.remove(file_path)
-                return False
-            if config.get("min_megapixels") and megapixels < config["min_megapixels"]:
-                os.remove(file_path)
-                return False
-
-            # Rotate based on EXIF orientation
-            exif = img._getexif()
-            if exif:
-                orientation = exif.get(274)
-                if orientation == 3:
-                    img = img.rotate(180, expand=True)
-                elif orientation == 6:
-                    img = img.rotate(270, expand=True)
-                elif orientation == 8:
-                    img = img.rotate(90, expand=True)
-
-            img.save(file_path)
-        return True
-    except Exception as e:
-        logging.error(f"Error processing image {file_path}: {e}")
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        return False
 
 
-async def download_from_pages_async(endpoint, total_assets, total_images, output_dir, additional_filters=None):
-    """
-    Asynchronously downloads images by fetching assets page by page.
-    Reverts to sequential downloading when the remaining images to download is below the concurrency limit.
-    """
-    pages = list(range(1, total_assets + 1))
-    random.shuffle(pages)
-    downloaded = 0
-    max_parallel_downloads = CONFIG.get("max_parallel_downloads", 5)
-    semaphore = Semaphore(max_parallel_downloads)
-    lock = Lock()  # Ensure thread-safe updates to the downloaded counter
 
-    async def process_page(session, page):
-        nonlocal downloaded
-        async with semaphore:  # Limit the number of concurrent tasks
-            assets = await fetch_asset_from_page_async(session, endpoint, page, size=1, additional_filters=additional_filters)
-            for asset in assets:
-                async with lock:  # Ensure only one task updates the count at a time
-                    if downloaded >= total_images:
-                        return
-                if await download_and_validate_async(asset, output_dir, CONFIG):
-                    async with lock:  # Lock again for incrementing
-                        downloaded += 1
 
-    async with aiohttp.ClientSession() as session:
-        while downloaded < total_images and pages:
-            if total_images - downloaded <= max_parallel_downloads:
-                # Sequential processing for remaining images
-                for page in pages[:total_images - downloaded]:
-                    assets = await fetch_asset_from_page_async(session, endpoint, page, size=1, additional_filters=additional_filters)
-                    for asset in assets:
-                        async with lock:
-                            if downloaded >= total_images:
-                                return downloaded
-                        if await download_and_validate_async(asset, output_dir, CONFIG):
-                            async with lock:
-                                downloaded += 1
-                    pages.pop(0)  # Remove processed page
-            else:
-                # Concurrent processing
-                tasks = [process_page(session, page) for page in pages[:max_parallel_downloads]]
-                await asyncio.gather(*tasks)
-                pages = pages[max_parallel_downloads:]  # Remove processed pages
 
-    return downloaded
+
+
+
+
 
 if __name__ == "__main__":
     asyncio.run(main_async())
