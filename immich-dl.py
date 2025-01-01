@@ -48,7 +48,6 @@ def load_config(config_file="config.yaml"):
         config["min_width"] = int(os.getenv("MIN_WIDTH")) if "MIN_WIDTH" in os.environ else config.get("min_width")
         config["min_height"] = int(os.getenv("MIN_HEIGHT")) if "MIN_HEIGHT" in os.environ else config.get("min_height")
         config["override"] = os.getenv("OVERRIDE", str(config.get("override", False))).lower() in ["true", "1"]
-        config["disable_safety_check"] = os.getenv("DISABLE_SAFETY_CHECK", str(config.get("disable_safety_check", False))).lower() in ["true", "1"]
         config["max_parallel_downloads"] = int(
             os.getenv("MAX_PARALLEL_DOWNLOADS", config.get("max_parallel_downloads", 5))
         )
@@ -94,46 +93,45 @@ def setup_logging():
 # 2. Directory Management
 # ------------------------------
 
-def check_and_clear_directory(directory, override):
+def check_and_prepare_directory(directory, override):
     """
-    Checks and clears the directory if the marker file is present.
-    If the marker file is missing and files exist, the script stops unless override is enabled.
+    Ensures the directory is prepared for use:
+    - If the directory doesn't exist, it is created.
+    - If the directory exists and has files:
+        - If the marker file is present, the directory is cleared.
+        - If the marker file is absent and override is enabled, the directory is cleared.
+        - If the marker file is absent and override is not enabled, the script stops.
+    - Creates a marker file to indicate the directory is managed by this script.
     """
     marker_path = os.path.join(directory, ".script_marker")
+    
+    # Ensure the directory exists
     if not os.path.exists(directory):
         logging.info(f"Directory {directory} does not exist. Creating it.")
         os.makedirs(directory)
-        return
-
-    # Check if directory contains files
-    if os.listdir(directory):
+    elif os.listdir(directory):  # Directory exists and contains files
         if os.path.exists(marker_path):
-            # Marker file is present, proceed to clear
             logging.info("Marker file found. Clearing the directory.")
-            for filename in os.listdir(directory):
-                file_path = os.path.join(directory, filename)
-                try:
-                    if os.path.isfile(file_path) or os.path.islink(file_path):
-                        os.unlink(file_path)
-                    elif os.path.isdir(file_path):
-                        shutil.rmtree(file_path)
-                except Exception as e:
-                    logging.error(f"Failed to delete {file_path}: {e}")
+        elif override:
+            logging.info("Marker file absent, but override enabled. Clearing the directory.")
         else:
-            # Marker file is missing
-            if not override:
-                logging.error(
-                    "Directory contains files, but the marker file is missing. Use --override to proceed."
-                )
-                exit(1)
-            else:
-                logging.info("Override enabled. Proceeding despite missing marker file.")
+            logging.error(
+                "Directory contains files, but the marker file is missing. Use --override to proceed."
+            )
+            exit(1)
+        
+        # Clear the directory
+        for filename in os.listdir(directory):
+            file_path = os.path.join(directory, filename)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.unlink(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+            except Exception as e:
+                logging.error(f"Failed to delete {file_path}: {e}")
 
-def create_marker_file(directory):
-    """
-    Creates a marker file in the directory to indicate it is managed by this script.
-    """
-    marker_path = os.path.join(directory, ".script_marker")
+    # Create the marker file
     try:
         with open(marker_path, "w") as f:
             f.write("This directory is managed by the immich_downloader script.")
@@ -385,8 +383,7 @@ async def main_async():
         return
 
     # Directory management
-    check_and_clear_directory(output_dir, args.override)
-    create_marker_file(output_dir)
+    check_and_prepare_directory(output_dir, args.override)
 
     # Configuration parameters
     person_ids = CONFIG.get("person_ids", [])
