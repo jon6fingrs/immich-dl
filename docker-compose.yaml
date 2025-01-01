@@ -18,7 +18,6 @@ services:
       MIN_HEIGHT: 800 #optional, no default
       SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]' #optional, no default
       OVERRIDE: "true" #default as shown
-      DISABLE_SAFETY_CHECK: "false" #default as shown
       MAX_PARALLEL_DOWNLOADS: 5 #default as shown
       DRY_RUN: "false" #default as shown
       ENABLE_HEIC_CONVERSION: "true" #default as shown
