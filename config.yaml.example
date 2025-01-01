@@ -53,14 +53,9 @@ dry_run: false
 # Default: 5
 max_parallel_downloads: 5
 
-# Disable safety check for the output directory
-# **Alternative**: DISABLE_SAFETY_CHECK environment variable
-# **Purpose**: Permanently disables checking for the marker file before clearing the directory.
-# If set to true, the script can clear directories without verifying the marker file.
-disable_safety_check: false
 
 # Override safety checks for the current run
-# **Alternative**: OVERRIDE environment variable
+# **Alternative**: OVERRIDE environment variable or --override commandline flag
 # **Purpose**: Temporarily bypasses the safety check, allowing the script to clear the directory
 # even if the marker file is missing.
 # Useful for ad-hoc operations without changing the permanent safety check setting.
@@ -69,6 +64,3 @@ override: false
 # Enable or disable HEIC to JPEG conversion
 enable_heic_conversion: true
 
-# Notes:
-# - If both `disable_safety_check` and `override` are set to true, the script will ignore all directory safety mechanisms.
-# - If both are set to false, the script will only operate on directories with a valid marker file.
