@@ -27,8 +27,8 @@ My entertainment center is run on a kodi box. I have wanted for a long time to s
 1. Clone the repository:
 
    ```bash
-   git clone <repository-url>
-   cd <repository-folder>
+   git clone https://github.com/jon6fingrs/immich-dl.git
+   cd immich-dl
    ```
 
 2. Install Python dependencies:
@@ -89,7 +89,7 @@ services:
     environment:
       IMMICH_URL: "http://your-immich-instance-url"
       API_KEY: "your-api-key-here"
-      OUTPUT_DIR: "/downloads"
+      OUTPUT_DIR: "/downloads" #env set to this in dockerfile
       TOTAL_IMAGES_TO_DOWNLOAD: "5"
       PERSON_IDS: '["person-id-1", "person-id-2"]'
       ALBUM_IDS: '["album-id-1", "album-id-2"]'
