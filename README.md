@@ -71,7 +71,6 @@ docker run --rm \
   -e SCREENSHOT_DIMENSIONS='[[1170, 2532], [1920, 1080]]' \
   -e MAX_PARALLEL_DOWNLOADS=5 \
   -e OVERRIDE=true \
-  -e DISABLE_SAFETY_CHECK=false \
   -e DRY_RUN=false \
   -e ENABLE_HEIC_CONVERSION=true \
   -v ./downloads:/downloads \
@@ -99,7 +98,6 @@ services:
       SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]'
       MAX_PARALLEL_DOWNLOADS: "5"
       OVERRIDE: "true"
-      DISABLE_SAFETY_CHECK: "false"
       DRY_RUN: "false"
       ENABLE_HEIC_CONVERSION: "true"
     volumes:
@@ -147,7 +145,6 @@ The script supports configurations via **YAML**, **environment variables**, or *
 | Minimum Height             | `MIN_HEIGHT`                 | `min_height`               | N/A                      | Minimum height for images (after orientation corrected)                                                                                                               |
 | Screenshot Dimensions      | `SCREENSHOT_DIMENSIONS`      | `screenshot_dimensions`    | N/A                      | JSON list of dimensions to exclude (e.g., screenshots).                                                                                                               |
 | Max Parallel Downloads     | `MAX_PARALLEL_DOWNLOADS`     | `max_parallel_downloads`   | N/A                      | Maximum number of parallel downloads.                                                                                                                                 |
-| Disable Safety Check       | `DISABLE_SAFETY_CHECK`       | `disable_safety_check`     | N/A                      | Disable safety check for the directory marker.                                                                                                                        |
 | Override Safety Check      | `OVERRIDE`                  | `override`                 | `--override`             | Override safety checks for the directory.                                                                                                                             |
 | Dry Run                    | `DRY_RUN`                   | `dry_run`                  | N/A                      | Simulate downloads without saving files.                                                                                                                              |
 | Enable HEIC Conversion     | `ENABLE_HEIC_CONVERSION`    | `enable_heic_conversion`   | N/A                      | Convert HEIC to JPEG. Defaults to true.                                                                                                                               |
@@ -189,9 +186,6 @@ screenshot_dimensions:
 
 # Maximum parallel downloads (optional)
 max_parallel_downloads: 5
-
-# Disable safety check for the directory (optional)
-disable_safety_check: false
 
 # Override safety check for the directory (optional)
 override: false
