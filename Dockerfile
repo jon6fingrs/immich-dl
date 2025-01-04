@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     libjpeg-dev \
     zlib1g-dev \
+    libheif-dev \ 
     libheif-examples \ 
     && rm -rf /var/lib/apt/lists/*
 
