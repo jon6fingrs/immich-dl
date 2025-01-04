@@ -4,3 +4,4 @@ PyYAML
 aiohttp
 aiofiles
 pillow-heif
+piexif
