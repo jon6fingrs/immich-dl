@@ -12,7 +12,6 @@ import aiohttp
 import aiofiles
 import asyncio
 from asyncio import Semaphore, Lock
-from concurrent.futures import ProcessPoolExecutor
 import subprocess
 from pillow_heif import register_heif_opener
 import glob
