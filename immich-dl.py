@@ -353,7 +353,7 @@ def convert_heic_files(output_dir):
         jpg_path = heic_path.rsplit(".", 1)[0] 
         try:
             # Use heic-convert to convert the file
-            result = os.system(f"heif-convert -o {jpg_path} {heic_path}")
+            result = os.system(f"heif-convert -v -o {jpg_path} {heic_path}")
             if result == 0:
                 os.remove(heic_path)  # Remove the original HEIC file if conversion succeeds
                 logging.info(f"Converted {heic_path} to {jpg_path}.jpg")
