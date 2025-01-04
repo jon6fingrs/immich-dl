@@ -13,6 +13,10 @@ import aiofiles
 import asyncio
 from asyncio import Semaphore, Lock
 from concurrent.futures import ProcessPoolExecutor
+import subprocess
+
+
+supports_atomic_write = False
 
 # ------------------------------
 # 1. Configuration and Logging
@@ -344,9 +348,25 @@ async def download_and_validate_async(asset, output_dir, config):
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as response:
                 response.raise_for_status()
-                async with aiofiles.open(file_path, "wb") as f:
-                    async for chunk in response.content.iter_chunked(8192):
-                        await f.write(chunk)
+                
+                global supports_atomic_write
+                
+                if supports_atomic_write:
+                    try:
+                        # Attempt atomic write
+                        fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                        with os.fdopen(fd, "wb") as f:
+                            async for chunk in response.content.iter_chunked(8192):
+                                f.write(chunk)
+                    except FileExistsError:
+                        # File already exists, skip
+                        logging.info(f"File {file_path} already exists. Skipping.")
+                        return None
+                else:
+                    # Fallback to standard writing
+                    async with aiofiles.open(file_path, "wb") as f:
+                        async for chunk in response.content.iter_chunked(8192):
+                            await f.write(chunk)
 
         # Offload image processing to a separate thread
         loop = asyncio.get_running_loop()
@@ -365,6 +385,22 @@ async def download_and_validate_async(asset, output_dir, config):
 # 6. Main Execution
 # ------------------------------
 
+# Function to determine filesystem type
+def get_filesystem_type(directory):
+    """
+    Determine the filesystem type of the given directory.
+    """
+    try:
+        # Use 'df -T' to find the filesystem type
+        result = subprocess.run(["df", "-T", directory], stdout=subprocess.PIPE, text=True, check=True)
+        lines = result.stdout.splitlines()
+        # Extract filesystem type from output
+        if len(lines) > 1:
+            return lines[1].split()[1]  # Filesystem type is in the second column
+    except Exception as e:
+        logging.warning(f"Failed to determine filesystem type: {e}")
+    return None
+
 async def main_async():
     global CONFIG
     CONFIG = load_config("config.yaml")
@@ -381,6 +417,13 @@ async def main_async():
     if not output_dir:
         logging.error("Output directory not specified.")
         return
+
+    # Determine filesystem type once
+    global supports_atomic_write  # Declare it as global to modify it here
+    filesystem_type = get_filesystem_type(output_dir)
+    supports_atomic_write = filesystem_type in ["nfs", "ntfs", "ext4", "xfs"]
+    logging.info(f"Filesystem type: {filesystem_type} - Supports atomic write: {supports_atomic_write}")
+
 
     # Directory management
     check_and_prepare_directory(output_dir, args.override)
