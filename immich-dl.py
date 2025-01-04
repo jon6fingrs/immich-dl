@@ -49,18 +49,26 @@ def load_config(config_file="config.yaml"):
         config["album_ids"] = json.loads(
             os.getenv("ALBUM_IDS", json.dumps(config.get("album_ids", [])))
         )
-        config["min_megapixels"] = float(os.getenv("MIN_MEGAPIXELS")) if "MIN_MEGAPIXELS" in os.environ else config.get("min_megapixels")
+        config["min_megapixels"] = float(
+            os.getenv("MIN_MEGAPIXELS", config.get("min_megapixels", 0))
+        )
         config["screenshot_dimensions"] = json.loads(
             os.getenv("SCREENSHOT_DIMENSIONS", json.dumps(config.get("screenshot_dimensions", [])))
         )
-        config["min_width"] = int(os.getenv("MIN_WIDTH")) if "MIN_WIDTH" in os.environ else config.get("min_width")
-        config["min_height"] = int(os.getenv("MIN_HEIGHT")) if "MIN_HEIGHT" in os.environ else config.get("min_height")
+        config["min_width"] = int(
+            os.getenv("MIN_WIDTH", config.get("min_width", 0))
+        )
+        config["min_height"] = int(
+            os.getenv("MIN_HEIGHT", config.get("min_height", 0))
+        )
         config["override"] = os.getenv("OVERRIDE", str(config.get("override", False))).lower() in ["true", "1"]
         config["max_parallel_downloads"] = int(
             os.getenv("MAX_PARALLEL_DOWNLOADS", config.get("max_parallel_downloads", 5))
         )
         config["dry_run"] = os.getenv("DRY_RUN", str(config.get("dry_run", False))).lower() in ["true", "1"]
-        config["enable_heic_conversion"] = os.getenv("ENABLE_HEIC_CONVERSION", "true").lower() in ["true", "1"]
+        config["enable_heic_conversion"] = os.getenv(
+            "ENABLE_HEIC_CONVERSION", str(config.get("enable_heic_conversion", True))
+        ).lower() in ["true", "1"]
 
         # Validate essential keys
         if not config["immich_url"] or not config["api_key"]:
@@ -273,10 +281,10 @@ def process_and_validate_image(file_path, config):
             megapixels = (width * height) / 1_000_000
 
             # Attempt to retrieve EXIF data if supported
-            exif = None
+            exif = {}
             if hasattr(img, "_getexif"):
                 try:
-                    exif = img._getexif()
+                    exif = img._getexif() or {}
                 except Exception as e:
                     logging.warning(f"Failed to retrieve EXIF for {file_path}: {e}")
 
@@ -294,7 +302,7 @@ def process_and_validate_image(file_path, config):
                 os.remove(file_path)
                 return False
 
-            exif_binary = img.info.get("exif") if "exif" in img.info else None
+            exif_binary = img.info.get("exif") if "exif" in img.info else piexif.dump({})
             exif_data = piexif.load(exif_binary)
             # Rotate based on EXIF orientation
             if exif:
