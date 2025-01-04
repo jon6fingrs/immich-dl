@@ -303,8 +303,14 @@ def process_and_validate_image(file_path, config):
                 elif orientation == 8:
                     img = img.rotate(90, expand=True)
 
-            # Save the image
-            img.save(file_path)
+            # Save the image with its original or updated format
+            exif_binary = img.info.get("exif") if "exif" in img.info else None
+            if exif_binary:
+                # Save as JPEG with EXIF metadata
+                img.save(file_path, img.format, exif=exif_binary)
+            else:
+                # Save in the original format without EXIF metadata
+                img.save(file_path, img.format)
 
             # Apply minimum width and height checks
             width, height = img.size
