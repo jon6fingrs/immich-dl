@@ -30,22 +30,39 @@ My entertainment center is run on a kodi box. I have wanted for a long time to s
    git clone https://github.com/jon6fingrs/immich-dl.git
    cd immich-dl
    ```
+2. Install System Dependencies:
 
-2. Install Python dependencies:
+   Before installing Python dependencies, make sure you have the required system libraries:
+
+   ```bash
+
+   sudo apt-get update && sudo apt-get install -y \
+       libjpeg-dev \
+       zlib1g-dev \
+       libheif-dev \
+       libheif-examples
+   ```
+
+   libjpeg-dev: For JPEG image handling.
+   zlib1g-dev: For PNG and other compressed file support.
+   libheif-dev: For HEIF/HEIC image handling.
+   libheif-examples: Includes the heif-convert tool used in the script.
+
+3. Install Python dependencies:
 
    ```bash
    pip install -r requirements.txt
    ```
 
-3. Create a configuration file `config.yaml` (see example below).
+4. Create a configuration file `config.yaml` (see example below).
 
-4. Run the script:
+5. Run the script:
 
    ```bash
    python3 immich-dl.py
    ```
 
-5. You can override any configuration via environment variables or command-line flags.
+6. You can override any configuration via environment variables or command-line flags.
 
 ---
 
