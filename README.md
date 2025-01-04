@@ -43,11 +43,6 @@ My entertainment center is run on a kodi box. I have wanted for a long time to s
        libheif-examples
    ```
 
-   libjpeg-dev: For JPEG image handling.
-   zlib1g-dev: For PNG and other compressed file support.
-   libheif-dev: For HEIF/HEIC image handling.
-   libheif-examples: Includes the heif-convert tool used in the script.
-
 4. Install Python dependencies:
 
    ```bash
