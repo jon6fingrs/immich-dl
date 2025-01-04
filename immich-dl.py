@@ -16,6 +16,7 @@ from concurrent.futures import ProcessPoolExecutor
 import subprocess
 from pillow_heif import register_heif_opener
 import glob
+import piexif
 
 register_heif_opener()
 
@@ -293,18 +294,29 @@ def process_and_validate_image(file_path, config):
                 os.remove(file_path)
                 return False
 
+            exif_binary = img.info.get("exif") if "exif" in img.info else None
+            exif_data = piexif.load(exif_binary)
             # Rotate based on EXIF orientation
             if exif:
                 orientation = exif.get(274)
                 if orientation == 3:
                     img = img.rotate(180, expand=True)
+                    exif_data["0th"][piexif.ImageIFD.Orientation] = 1
+                    exif_binary = piexif.dump(exif_data)
+                    logging.info(f"Orientation corrected for {file_path}.")
                 elif orientation == 6:
                     img = img.rotate(270, expand=True)
+                    exif_data["0th"][piexif.ImageIFD.Orientation] = 1
+                    exif_binary = piexif.dump(exif_data)
+                    logging.info(f"Orientation corrected for {file_path}.")
                 elif orientation == 8:
                     img = img.rotate(90, expand=True)
-
+                    exif_data["0th"][piexif.ImageIFD.Orientation] = 1
+                    exif_binary = piexif.dump(exif_data)
+                    logging.info(f"Orientation corrected for {file_path}.")
+                    
             # Save the image with its original or updated format
-            exif_binary = img.info.get("exif") if "exif" in img.info else None
+
             if exif_binary:
                 # Save as JPEG with EXIF metadata
                 img.save(file_path, img.format, exif=exif_binary)
