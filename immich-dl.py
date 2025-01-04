@@ -14,7 +14,10 @@ import asyncio
 from asyncio import Semaphore, Lock
 from concurrent.futures import ProcessPoolExecutor
 import subprocess
+from pillow_heif import register_heif_opener
+import glob
 
+register_heif_opener()
 
 supports_atomic_write = False
 
@@ -261,21 +264,23 @@ async def download_from_pages_async(endpoint, total_assets, total_images, output
 
 def process_and_validate_image(file_path, config):
     try:
-        # Check if the file is a HEIC image and convert if needed
-        if file_path.lower().endswith(".heic") and config.get("enable_heic_conversion", True):
-            jpg_path = file_path.rsplit(".", 1)[0] + ".jpg"
-            if not convert_heic_to_jpg(file_path, jpg_path):
-                return False
-            file_path = jpg_path  # Update file path to the new JPEG file
-
         with Image.open(file_path) as img:
+            logging.info(f"Processing file {file_path} with format {img.format}.")
+
             # Get initial dimensions and megapixels before rotation
             width, height = img.size
             megapixels = (width * height) / 1_000_000
 
+            # Attempt to retrieve EXIF data if supported
+            exif = None
+            if hasattr(img, "_getexif"):
+                try:
+                    exif = img._getexif()
+                except Exception as e:
+                    logging.warning(f"Failed to retrieve EXIF for {file_path}: {e}")
+
             # Check if the image matches screenshot dimensions and lacks camera EXIF data
             if config.get("screenshot_dimensions"):
-                exif = img._getexif()
                 if (width, height) in [tuple(dim) for dim in config["screenshot_dimensions"]]:
                     if not exif or not exif.get(271):  # Check for "Make" field in EXIF data
                         logging.warning(f"Image {file_path} matches screenshot dimensions and lacks camera EXIF data. Discarding.")
@@ -284,11 +289,11 @@ def process_and_validate_image(file_path, config):
 
             # Check minimum megapixels
             if config.get("min_megapixels") and megapixels < config["min_megapixels"]:
+                logging.warning(f"Image {file_path} below minimum megapixels. Discarding.")
                 os.remove(file_path)
                 return False
 
             # Rotate based on EXIF orientation
-            exif = img._getexif()
             if exif:
                 orientation = exif.get(274)
                 if orientation == 3:
@@ -298,17 +303,17 @@ def process_and_validate_image(file_path, config):
                 elif orientation == 8:
                     img = img.rotate(90, expand=True)
 
-            # Save the rotated image
+            # Save the image
             img.save(file_path)
 
-            # Get updated dimensions after rotation
-            width, height = img.size
-
             # Apply minimum width and height checks
+            width, height = img.size
             if config.get("min_width") and width < config["min_width"]:
+                logging.warning(f"Image {file_path} below minimum width. Discarding.")
                 os.remove(file_path)
                 return False
             if config.get("min_height") and height < config["min_height"]:
+                logging.warning(f"Image {file_path} below minimum height. Discarding.")
                 os.remove(file_path)
                 return False
 
@@ -319,28 +324,43 @@ def process_and_validate_image(file_path, config):
             os.remove(file_path)
         return False
 
-def convert_heic_to_jpg(heic_path, jpg_path):
+
+
+def convert_heic_files(output_dir):
     """
-    Converts a HEIC file to a JPEG file using an external converter like `heif-convert`.
+    Converts all HEIC files in the output directory to JPEG using heic-convert.
     """
-    try:
-        result = os.system(f"heif-convert {heic_path} {jpg_path}")
-        if result == 0:
-            os.remove(heic_path)  # Remove the original HEIC file if conversion succeeds
-            return True
-        else:
-            logging.error(f"HEIC to JPEG conversion failed for {heic_path}")
-            return False
-    except Exception as e:
-        logging.error(f"Error during HEIC to JPEG conversion for {heic_path}: {e}")
-        return False
+    heic_files = glob.glob(os.path.join(output_dir, "*.heic"))
+    for heic_path in heic_files:
+        jpg_path = heic_path.rsplit(".", 1)[0] 
+        try:
+            # Use heic-convert to convert the file
+            result = os.system(f"heif-convert -o {jpg_path} {heic_path}")
+            if result == 0:
+                os.remove(heic_path)  # Remove the original HEIC file if conversion succeeds
+                logging.info(f"Converted {heic_path} to {jpg_path}.jpg")
+            else:
+                logging.error(f"HEIC to JPEG conversion failed for {heic_path}.jpg")
+        except Exception as e:
+            logging.error(f"Error during HEIC to JPEG conversion for {heic_path}: {e}")
+
 
 # ------------------------------
 # 5. Downloading and Saving
 # ------------------------------
 
 async def download_and_validate_async(asset, output_dir, config):
-    file_path = os.path.join(output_dir, f"{asset['id']}.jpg")
+    # Extract the original file extension from the filename
+    original_filename = asset.get("originalFileName", "default.jpg")  # Default to avoid errors
+    _, file_extension = os.path.splitext(original_filename)  # Extract the extension
+
+    # Ensure the file extension is lowercased for consistency
+    file_extension = file_extension.lower()
+    if not file_extension.startswith("."):
+        file_extension = f".{file_extension}"
+
+    # Construct the file path with the original extension
+    file_path = os.path.join(output_dir, f"{asset['id']}{file_extension}")
     url = f"{config['immich_url']}/api/assets/{asset['id']}/original"
     headers = {"x-api-key": config["api_key"]}
 
@@ -473,6 +493,10 @@ async def main_async():
                 additional_filters={"albumIds": [album_id]}
             )
             logging.info(f"Downloaded {downloaded} images for album ID {album_id}.")
+
+    if CONFIG.get("enable_heic_conversion", True):
+        logging.info("Starting HEIC to JPEG conversion for downloaded images.")
+        convert_heic_files(CONFIG["output_dir"])
 
 if __name__ == "__main__":
     asyncio.run(main_async())
