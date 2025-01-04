@@ -3,3 +3,4 @@ Pillow
 PyYAML
 aiohttp
 aiofiles
+pillow-heif
