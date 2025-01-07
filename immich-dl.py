@@ -16,6 +16,7 @@ import subprocess
 from pillow_heif import register_heif_opener
 import glob
 import piexif
+from datetime import datetime
 
 register_heif_opener()
 
@@ -69,6 +70,18 @@ def load_config(config_file="config.yaml"):
             "ENABLE_HEIC_CONVERSION", str(config.get("enable_heic_conversion", True))
         ).lower() in ["true", "1"]
 
+        # Parse min_date and max_date
+        min_date_str = os.getenv("MIN_DATE", config.get("min_date"))
+        max_date_str = os.getenv("MAX_DATE", config.get("max_date"))
+
+        # Convert to datetime only if provided
+        config["min_date"] = (
+            datetime.strptime(min_date_str, "%Y-%m-%d") if min_date_str else None
+        )
+        config["max_date"] = (
+            datetime.strptime(max_date_str, "%Y-%m-%d") if max_date_str else None
+        )
+        
         # Validate essential keys
         if not config["immich_url"] or not config["api_key"]:
             raise ValueError("Both IMMICH_URL and API_KEY must be specified, either in the YAML file or as environment variables.")
@@ -287,6 +300,35 @@ def process_and_validate_image(file_path, config):
                 except Exception as e:
                     logging.warning(f"Failed to retrieve EXIF for {file_path}: {e}")
 
+            # Date filter: Check the date the picture was taken
+            if config.get("min_date") or config.get("max_date"):
+                try:
+                    # Try to get DateTimeOriginal (36867) or fallback to Date and Time (306)
+                    date_taken_str = exif.get(36867) or exif.get(306)  # EXIF DateTimeOriginal or Date and Time
+                    if date_taken_str:
+                        date_taken = datetime.strptime(date_taken_str, "%Y:%m:%d %H:%M:%S")
+                        min_date = config.get("min_date")
+                        max_date = config.get("max_date")
+
+                        # Apply date filters
+                        if min_date and date_taken < min_date:
+                            logging.warning(f"Image {file_path} taken on {date_taken} is before the minimum date. Discarding.")
+                            os.remove(file_path)
+                            return False
+                        if max_date and date_taken > max_date:
+                            logging.warning(f"Image {file_path} taken on {date_taken} is after the maximum date. Discarding.")
+                            os.remove(file_path)
+                            return False
+                    else:
+                        # No suitable date found, discard the image
+                        logging.warning(f"No suitable date found in EXIF for {file_path}. Discarding.")
+                        os.remove(file_path)
+                        return False
+                except Exception as e:
+                    logging.warning(f"Failed to process date for {file_path}: {e}")
+                    os.remove(file_path)  # Discard the image on error
+                    return False
+            
             # Check if the image matches screenshot dimensions and lacks camera EXIF data
             if config.get("screenshot_dimensions"):
                 if (width, height) in [tuple(dim) for dim in config["screenshot_dimensions"]]:
