@@ -12,7 +12,7 @@ services:
       API_KEY: "api-key" #necessary
       TOTAL_IMAGES_TO_DOWNLOAD: 20 #necessary
       PERSON_IDS: '["person-id-1", "person-id-2"]'
-      ALBUM_IDS: '["album-id-1", "album-id-2"]' #optional- will pull from whole library if album_id and person_id are blank
+      ALBUM_IDS: '["album-id-1", "album-id-2"]' #optional, will pull from whole library if album_id and person_id are blank
       MIN_MEGAPIXELS: 2.0 #optional, no default
       MIN_WIDTH: 1000 #optional, no default
       MIN_HEIGHT: 800 #optional, no default
@@ -21,5 +21,7 @@ services:
       MAX_PARALLEL_DOWNLOADS: 5 #default as shown
       DRY_RUN: "false" #default as shown
       ENABLE_HEIC_CONVERSION: "true" #default as shown
+      MIN_DATE: "2020-01-01" #optional, Minimum date in YYYY-MM-DD format
+      MAX_DATE: "2025-01-01" #optional, Maximum date in YYYY-MM-DD format
     volumes:
       - ./downloads:/downloads # OUTPUT_DIR set to /downloads in Dockerfile since the volume mapping is all that matters, but could be modified with env variables
