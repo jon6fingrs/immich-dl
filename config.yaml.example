@@ -53,7 +53,6 @@ dry_run: false
 # Default: 5
 max_parallel_downloads: 5
 
-
 # Override safety checks for the current run
 # **Alternative**: OVERRIDE environment variable or --override commandline flag
 # **Purpose**: Temporarily bypasses the safety check, allowing the script to clear the directory
@@ -64,3 +63,6 @@ override: false
 # Enable or disable HEIC to JPEG conversion
 enable_heic_conversion: true
 
+# Can add min or max dates. Will check based off EXIF data, first the date taken, or second, if unavailable, the date created.
+min_date: "2020-01-01"  # Minimum date in YYYY-MM-DD format
+max_date: "2025-01-01"  # Maximum date in YYYY-MM-DD format
