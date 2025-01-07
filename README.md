@@ -112,6 +112,8 @@ services:
       OVERRIDE: "true"
       DRY_RUN: "false"
       ENABLE_HEIC_CONVERSION: "true"
+      MIN_DATE: "2020-01-01" #optional, Minimum date in YYYY-MM-DD format
+      MAX_DATE: "2025-01-01" #optional, Maximum date in YYYY-MM-DD format
     volumes:
       - ./downloads:/downloads
 ```
@@ -160,6 +162,8 @@ The script supports configurations via **YAML**, **environment variables**, or *
 | Override Safety Check      | `OVERRIDE`                  | `override`                 | `--override`             | Override safety checks for the directory.                                                                                                                             |
 | Dry Run                    | `DRY_RUN`                   | `dry_run`                  | N/A                      | Simulate downloads without saving files.                                                                                                                              |
 | Enable HEIC Conversion     | `ENABLE_HEIC_CONVERSION`    | `enable_heic_conversion`   | N/A                      | Convert HEIC to JPEG. Defaults to true.                                                                                                                               |
+| Minimum Date               | `MIN_DATE`                  | `min_date`                 | N/A                      | Set minimum date for photo based off EXIF data.                                                                                                                       |
+| Maximum Date               | `MAX_DATE`                  | `max_date`                 | N/A                      | Set maximum date for photo based off EXIF data.                                                                                                                       |
 
 ---
 
@@ -207,6 +211,10 @@ dry_run: false
 
 # Convert HEIC to JPEG (optional)
 enable_heic_conversion: true
+
+# Can add min or max dates. Will check based off EXIF data, first the date taken, or second, if unavailable, the date created. (optional)
+min_date: "2020-01-01"  # Minimum date in YYYY-MM-DD format
+max_date: "2025-01-01"  # Maximum date in YYYY-MM-DD format
 ```
 
 ---
