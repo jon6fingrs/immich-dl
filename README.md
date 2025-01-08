@@ -40,7 +40,10 @@ My entertainment center is run on a kodi box. I have wanted for a long time to s
        libjpeg-dev \
        zlib1g-dev \
        libheif-dev \
-       libheif-examples
+       libheif-examples \
+       imagemagick \
+       libimage-exiftool-perl \
+       python3-pip
    ```
 
 4. Install Python dependencies:
