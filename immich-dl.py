@@ -285,93 +285,88 @@ async def download_from_pages_async(endpoint, total_assets, total_images, output
 
 def process_and_validate_image(file_path, config):
     try:
-        with Image.open(file_path) as img:
-            logging.info(f"Processing file {file_path} with format {img.format}.")
+        logging.info(f"Processing file {file_path}.")
+        file_ext = file_path.lower().split('.')[-1]
+        exif = {}
 
-            # Get initial dimensions and megapixels before rotation
+        # Extract EXIF data
+        if file_ext == "heic":
+            logging.info(f"Extracting EXIF from HEIC file: {file_path}")
+            exif = _extract_exif_from_heic(file_path)
+        else:
+            exif = _extract_exif_from_jpeg(file_path)
+
+        # Extract date from EXIF
+        date_taken = _extract_date_from_exif(exif)
+
+        # Date validation (only if min_date or max_date is specified)
+        if (config.get("min_date") or config.get("max_date")) and not date_taken:
+            logging.warning(f"No valid date found for {file_path}, and date filtering is enabled. Discarding.")
+            os.remove(file_path)
+            return False
+
+        if date_taken:
+            min_date = config.get("min_date")
+            max_date = config.get("max_date")
+            if min_date and date_taken < min_date:
+                logging.warning(f"Image {file_path} taken on {date_taken} is before the minimum date. Discarding.")
+                os.remove(file_path)
+                return False
+            if max_date and date_taken > max_date:
+                logging.warning(f"Image {file_path} taken on {date_taken} is after the maximum date. Discarding.")
+                os.remove(file_path)
+                return False
+
+        # Validate image dimensions, megapixels, and other checks
+        with Image.open(file_path) as img:
             width, height = img.size
             megapixels = (width * height) / 1_000_000
 
-            # Attempt to retrieve EXIF data if supported
-            exif = {}
-            if hasattr(img, "_getexif"):
-                try:
-                    exif = img._getexif() or {}
-                except Exception as e:
-                    logging.warning(f"Failed to retrieve EXIF for {file_path}: {e}")
-
-            # Date filter: Check the date the picture was taken
-            if config.get("min_date") or config.get("max_date"):
-                try:
-                    # Try to get DateTimeOriginal (36867) or fallback to Date and Time (306)
-                    date_taken_str = exif.get(36867) or exif.get(306)  # EXIF DateTimeOriginal or Date and Time
-                    if date_taken_str:
-                        date_taken = datetime.strptime(date_taken_str, "%Y:%m:%d %H:%M:%S")
-                        min_date = config.get("min_date")
-                        max_date = config.get("max_date")
-
-                        # Apply date filters
-                        if min_date and date_taken < min_date:
-                            logging.warning(f"Image {file_path} taken on {date_taken} is before the minimum date. Discarding.")
-                            os.remove(file_path)
-                            return False
-                        if max_date and date_taken > max_date:
-                            logging.warning(f"Image {file_path} taken on {date_taken} is after the maximum date. Discarding.")
-                            os.remove(file_path)
-                            return False
-                    else:
-                        # No suitable date found, discard the image
-                        logging.warning(f"No suitable date found in EXIF for {file_path}. Discarding.")
-                        os.remove(file_path)
-                        return False
-                except Exception as e:
-                    logging.warning(f"Failed to process date for {file_path}: {e}")
-                    os.remove(file_path)  # Discard the image on error
-                    return False
-            
-            # Check if the image matches screenshot dimensions and lacks camera EXIF data
+            # Screenshot dimensions check
             if config.get("screenshot_dimensions"):
                 if (width, height) in [tuple(dim) for dim in config["screenshot_dimensions"]]:
-                    if not exif or not exif.get(271):  # Check for "Make" field in EXIF data
-                        logging.warning(f"Image {file_path} matches screenshot dimensions and lacks camera EXIF data. Discarding.")
+                    if not exif or not exif.get("Make"):  # Fail if EXIF or 'Make' field is missing
+                        logging.warning(f"Image {file_path} matches screenshot dimensions but lacks EXIF or camera 'Make' field. Discarding.")
                         os.remove(file_path)
                         return False
 
-            # Check minimum megapixels
+            # Minimum megapixels
             if config.get("min_megapixels") and megapixels < config["min_megapixels"]:
                 logging.warning(f"Image {file_path} below minimum megapixels. Discarding.")
                 os.remove(file_path)
                 return False
 
-            exif_binary = img.info.get("exif") if "exif" in img.info else piexif.dump({})
-            exif_data = piexif.load(exif_binary)
-            # Rotate based on EXIF orientation
-            if exif:
-                orientation = exif.get(274)
-                if orientation == 3:
+            # Orientation Correction
+            image_modified = False
+            orientation = exif.get(274) if file_ext != "heic" else exif.get("exif:Orientation")
+            if orientation:
+                orientation = int(orientation)
+                if orientation == 3:  # Rotate 180 degrees
                     img = img.rotate(180, expand=True)
-                    exif_data["0th"][piexif.ImageIFD.Orientation] = 1
-                    exif_binary = piexif.dump(exif_data)
-                    logging.info(f"Orientation corrected for {file_path}.")
-                elif orientation == 6:
+                    logging.info(f"Orientation corrected for {file_path}: Rotated 180 degrees.")
+                    image_modified = True
+                elif orientation == 6:  # Rotate 270 degrees (clockwise)
                     img = img.rotate(270, expand=True)
-                    exif_data["0th"][piexif.ImageIFD.Orientation] = 1
-                    exif_binary = piexif.dump(exif_data)
-                    logging.info(f"Orientation corrected for {file_path}.")
-                elif orientation == 8:
+                    logging.info(f"Orientation corrected for {file_path}: Rotated 270 degrees clockwise.")
+                    image_modified = True
+                elif orientation == 8:  # Rotate 90 degrees (counter-clockwise)
                     img = img.rotate(90, expand=True)
+                    logging.info(f"Orientation corrected for {file_path}: Rotated 90 degrees counter-clockwise.")
+                    image_modified = True
+
+            # Save modified image
+            if image_modified:
+                if file_ext == "heic":
+                    # Use exiftool to update the orientation metadata without resaving the image
+                    update_heic_orientation_with_exiftool(file_path)
+                else:
+                    # Update EXIF orientation to "Normal" (1) for JPEG
+                    exif_data = piexif.load(img.info.get("exif", piexif.dump({})))
                     exif_data["0th"][piexif.ImageIFD.Orientation] = 1
                     exif_binary = piexif.dump(exif_data)
-                    logging.info(f"Orientation corrected for {file_path}.")
-                    
-            # Save the image with its original or updated format
+                    img.save(file_path, img.format, exif=exif_binary)
+                    logging.info(f"Saved modified JPEG with updated EXIF: {file_path}")
 
-            if exif_binary:
-                # Save as JPEG with EXIF metadata
-                img.save(file_path, img.format, exif=exif_binary)
-            else:
-                # Save in the original format without EXIF metadata
-                img.save(file_path, img.format)
 
             # Apply minimum width and height checks
             width, height = img.size
@@ -391,6 +386,72 @@ def process_and_validate_image(file_path, config):
             os.remove(file_path)
         return False
 
+def _extract_exif_from_jpeg(file_path):
+    """
+    Extract EXIF data from JPEG files using Pillow.
+    Returns a dictionary of EXIF fields.
+    """
+    try:
+        with Image.open(file_path) as img:
+            if hasattr(img, "_getexif"):
+                return img._getexif() or {}
+    except Exception as e:
+        logging.warning(f"Failed to extract EXIF data from JPEG {file_path}: {e}")
+    return {}
+
+
+def _extract_date_from_exif(exif):
+    """
+    Extract the date the picture was taken from EXIF data.
+    Returns a datetime object or None.
+    """
+    try:
+        date_str = exif.get("exif:DateTimeOriginal") or exif.get("exif:DateTime") or exif.get(36867) or exif.get(306)
+        if date_str:
+            return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+    except Exception as e:
+        logging.warning(f"Failed to parse date from EXIF data: {e}")
+    return None
+
+def _extract_exif_from_heic(file_path):
+    """
+    Extract EXIF data from HEIC files using ImageMagick's `identify -verbose`.
+    Returns a dictionary of EXIF fields.
+    """
+    try:
+        result = subprocess.run(
+            ["identify", "-verbose", file_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if result.returncode != 0:
+            logging.warning(f"Failed to run identify on {file_path}: {result.stderr.strip()}")
+            return {}
+
+        exif = {}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("exif:"):
+                key, value = line.split(": ", 1)
+                exif[key.strip()] = value.strip()
+        return exif
+    except Exception as e:
+        logging.error(f"Error extracting EXIF data from HEIC file {file_path}: {e}")
+        return {}
+
+def update_heic_orientation_with_exiftool(file_path, orientation=1):
+    """
+    Updates the EXIF orientation tag for HEIC images using exiftool.
+    """
+    try:
+        subprocess.run(
+            ["exiftool", f"-Orientation={orientation}", "-overwrite_original", file_path],
+            check=True
+        )
+        logging.info(f"Updated EXIF orientation for HEIC file {file_path} to {orientation}.")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to update EXIF orientation for {file_path}: {e}")
 
 
 def convert_heic_files(output_dir):
