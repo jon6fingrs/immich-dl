@@ -17,10 +17,14 @@ from pillow_heif import register_heif_opener
 import glob
 import piexif
 from datetime import datetime
+import concurrent.futures  # <-- Added for concurrent validation
 
 register_heif_opener()
 
+# Global references
+CONFIG = {}
 supports_atomic_write = False
+VALIDATION_EXECUTOR = None  # We'll assign a real thread pool in main_async
 
 # ------------------------------
 # 1. Configuration and Logging
@@ -74,12 +78,18 @@ def load_config(config_file="config.yaml"):
         min_date_str = os.getenv("MIN_DATE", config.get("min_date"))
         max_date_str = os.getenv("MAX_DATE", config.get("max_date"))
 
-        # Convert to datetime only if provided
         config["min_date"] = (
             datetime.strptime(min_date_str, "%Y-%m-%d") if min_date_str else None
         )
         config["max_date"] = (
             datetime.strptime(max_date_str, "%Y-%m-%d") if max_date_str else None
+        )
+
+        config["max_validation_workers"] = int(
+            os.getenv("MAX_VALIDATION_WORKERS", config.get("max_validation_workers", 4))
+        )
+        config["max_heic_conversion_workers"] = int(
+            os.getenv("MAX_HEIC_CONVERSION_WORKERS", config.get("max_heic_conversion_workers", 4))
         )
         
         # Validate essential keys
@@ -92,7 +102,6 @@ def load_config(config_file="config.yaml"):
     except (yaml.YAMLError, ValueError, json.JSONDecodeError) as e:
         logging.error(f"Error parsing config file or environment variables: {e}")
         raise
-
 
 def setup_logging():
     """
@@ -133,7 +142,6 @@ def check_and_prepare_directory(directory, override):
     """
     marker_path = os.path.join(directory, ".script_marker")
     
-    # Ensure the directory exists
     if not os.path.exists(directory):
         logging.info(f"Directory {directory} does not exist. Creating it.")
         os.makedirs(directory)
@@ -248,31 +256,38 @@ async def download_from_pages_async(endpoint, total_assets, total_images, output
     async def process_page(session, page):
         nonlocal downloaded
         async with semaphore:  # Limit the number of concurrent tasks
-            assets = await fetch_asset_from_page_async(session, endpoint, page, size=1, additional_filters=additional_filters)
+            assets = await fetch_asset_from_page_async(
+                session, endpoint, page, size=1, additional_filters=additional_filters
+            )
             for asset in assets:
-                async with lock:  # Ensure only one task updates the count at a time
+                async with lock:
                     if downloaded >= total_images:
                         return
-                if await download_and_validate_async(asset, output_dir, CONFIG):
-                    async with lock:  # Lock again for incrementing
+                # Download & validate concurrently
+                file_path = await download_and_validate_async(asset, output_dir, CONFIG)
+                if file_path:
+                    async with lock:
                         downloaded += 1
 
     async with aiohttp.ClientSession() as session:
         while downloaded < total_images and pages:
+            # If what's left to download is less than concurrency, do it sequentially
             if total_images - downloaded <= max_parallel_downloads:
-                # Sequential processing for remaining images
                 for page in pages[:total_images - downloaded]:
-                    assets = await fetch_asset_from_page_async(session, endpoint, page, size=1, additional_filters=additional_filters)
+                    assets = await fetch_asset_from_page_async(
+                        session, endpoint, page, size=1, additional_filters=additional_filters
+                    )
                     for asset in assets:
                         async with lock:
                             if downloaded >= total_images:
                                 return downloaded
-                        if await download_and_validate_async(asset, output_dir, CONFIG):
+                        file_path = await download_and_validate_async(asset, output_dir, CONFIG)
+                        if file_path:
                             async with lock:
                                 downloaded += 1
                     pages.pop(0)  # Remove processed page
             else:
-                # Concurrent processing
+                # Otherwise run tasks concurrently
                 tasks = [process_page(session, page) for page in pages[:max_parallel_downloads]]
                 await asyncio.gather(*tasks)
                 pages = pages[max_parallel_downloads:]  # Remove processed pages
@@ -460,17 +475,59 @@ def convert_heic_files(output_dir):
     """
     heic_files = glob.glob(os.path.join(output_dir, "*.heic"))
     for heic_path in heic_files:
-        jpg_path = heic_path.rsplit(".", 1)[0] 
+        jpg_path = heic_path.rsplit(".", 1)[0]
         try:
-            # Use heic-convert to convert the file
             result = os.system(f"heif-convert -v -o {jpg_path} {heic_path}")
             if result == 0:
-                os.remove(heic_path)  # Remove the original HEIC file if conversion succeeds
+                os.remove(heic_path)
                 logging.info(f"Converted {heic_path} to {jpg_path}.jpg")
             else:
                 logging.error(f"HEIC to JPEG conversion failed for {heic_path}.jpg")
         except Exception as e:
             logging.error(f"Error during HEIC to JPEG conversion for {heic_path}: {e}")
+
+async def convert_heic_files_concurrently(
+    output_dir, 
+    max_workers: int
+):
+    """
+    Converts all HEIC files in the output directory to JPEG using heif-convert,
+    in parallel using a thread pool.
+    """
+    heic_files = glob.glob(os.path.join(output_dir, "*.heic"))
+    if not heic_files:
+        logging.info("No HEIC files found for conversion.")
+        return
+
+    loop = asyncio.get_running_loop()
+
+    def convert_single_heic(heic_path):
+        """
+        Runs heif-convert on a single file, then removes the .heic if successful.
+        """
+        jpg_path = heic_path.rsplit(".", 1)[0]  # e.g., 'image' from 'image.heic'
+        cmd = f'heif-convert -v -o "{jpg_path}" "{heic_path}"'
+        try:
+            result = os.system(cmd)
+            if result == 0:
+                os.remove(heic_path)
+                logging.info(f"Converted {heic_path} to {jpg_path}.jpg")
+            else:
+                logging.error(f"HEIC to JPEG conversion failed for {heic_path}")
+        except Exception as e:
+            logging.error(f"Error during HEIC to JPEG conversion for {heic_path}: {e}")
+
+    # Create a thread pool just for this conversion
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        tasks = []
+        for heic_file in heic_files:
+            # Schedule each conversion in the thread pool
+            tasks.append(loop.run_in_executor(executor, convert_single_heic, heic_file))
+
+        # Wait for all tasks to complete
+        await asyncio.gather(*tasks)
+
+    logging.info("Concurrent HEIC conversion complete.")
 
 
 # ------------------------------
@@ -478,16 +535,17 @@ def convert_heic_files(output_dir):
 # ------------------------------
 
 async def download_and_validate_async(asset, output_dir, config):
-    # Extract the original file extension from the filename
-    original_filename = asset.get("originalFileName", "default.jpg")  # Default to avoid errors
-    _, file_extension = os.path.splitext(original_filename)  # Extract the extension
+    """
+    Downloads an asset from Immich, then offloads the CPU-bound validation to a thread pool.
+    Returns the file path if successful, None otherwise.
+    """
+    original_filename = asset.get("originalFileName", "default.jpg")
+    _, file_extension = os.path.splitext(original_filename)
 
-    # Ensure the file extension is lowercased for consistency
     file_extension = file_extension.lower()
     if not file_extension.startswith("."):
         file_extension = f".{file_extension}"
 
-    # Construct the file path with the original extension
     file_path = os.path.join(output_dir, f"{asset['id']}{file_extension}")
     url = f"{config['immich_url']}/api/assets/{asset['id']}/original"
     headers = {"x-api-key": config["api_key"]}
@@ -496,33 +554,33 @@ async def download_and_validate_async(asset, output_dir, config):
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as response:
                 response.raise_for_status()
-                
+
                 global supports_atomic_write
-                
                 if supports_atomic_write:
                     try:
-                        # Attempt atomic write
                         fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
                         with os.fdopen(fd, "wb") as f:
                             async for chunk in response.content.iter_chunked(8192):
                                 f.write(chunk)
                     except FileExistsError:
-                        # File already exists, skip
                         logging.info(f"File {file_path} already exists. Skipping.")
                         return None
                 else:
-                    # Fallback to standard writing
                     async with aiofiles.open(file_path, "wb") as f:
                         async for chunk in response.content.iter_chunked(8192):
                             await f.write(chunk)
 
-        # Offload image processing to a separate thread
+        # **Offload** validation to our shared thread pool:
         loop = asyncio.get_running_loop()
-        success = await loop.run_in_executor(None, process_and_validate_image, file_path, config)
-        if success:
-            return file_path
-        else:
-            return None
+        # Use the global VALIDATION_EXECUTOR for concurrency
+        success = await loop.run_in_executor(
+            VALIDATION_EXECUTOR,
+            process_and_validate_image,
+            file_path,
+            config
+        )
+        return file_path if success else None
+
     except Exception as e:
         logging.error(f"Error downloading or validating asset {asset['id']}: {e}")
         if os.path.exists(file_path):
@@ -533,18 +591,15 @@ async def download_and_validate_async(asset, output_dir, config):
 # 6. Main Execution
 # ------------------------------
 
-# Function to determine filesystem type
 def get_filesystem_type(directory):
     """
     Determine the filesystem type of the given directory.
     """
     try:
-        # Use 'df -T' to find the filesystem type
         result = subprocess.run(["df", "-T", directory], stdout=subprocess.PIPE, text=True, check=True)
         lines = result.stdout.splitlines()
-        # Extract filesystem type from output
         if len(lines) > 1:
-            return lines[1].split()[1]  # Filesystem type is in the second column
+            return lines[1].split()[1]
     except Exception as e:
         logging.warning(f"Failed to determine filesystem type: {e}")
     return None
@@ -560,28 +615,33 @@ async def main_async():
     parser.add_argument("--override", action="store_true", help="Override safety checks for the directory")
     args = parser.parse_args()
 
-    # Determine output directory
     output_dir = args.output_dir or CONFIG.get("output_dir")
     if not output_dir:
         logging.error("Output directory not specified.")
         return
 
-    # Determine filesystem type once
-    global supports_atomic_write  # Declare it as global to modify it here
+    global supports_atomic_write
     filesystem_type = get_filesystem_type(output_dir)
     supports_atomic_write = filesystem_type in ["nfs", "ntfs", "ext4", "xfs"]
     logging.info(f"Filesystem type: {filesystem_type} - Supports atomic write: {supports_atomic_write}")
 
-
-    # Directory management
     check_and_prepare_directory(output_dir, args.override)
+
+    # -------------
+    # NEW: Create a thread pool for concurrent CPU-bound validations
+    global VALIDATION_EXECUTOR
+    VALIDATION_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+        max_workers=CONFIG["max_validation_workers"]
+    )
+    # Tweak max_workers for your system’s CPU
+    # -------------
 
     # Configuration parameters
     person_ids = CONFIG.get("person_ids", [])
     album_ids = CONFIG.get("album_ids", [])
-    total_images_per_id = CONFIG["total_images_to_download"]  # Apply per ID
+    total_images_per_id = CONFIG["total_images_to_download"]
 
-    # No specific IDs provided; fetch from general pool
+    # If no IDs given, download from general pool
     if not person_ids and not album_ids:
         logging.info("No person IDs or album IDs specified. Fetching from general pool.")
         total_assets = fetch_total_assets(CONFIG["immich_url"], "assets")
@@ -594,7 +654,7 @@ async def main_async():
         )
         logging.info(f"Downloaded {downloaded} images from the general pool.")
     else:
-        # Download for each person ID
+        # Person IDs
         for person_id in person_ids:
             logging.info(f"Processing downloads for person ID: {person_id}")
             total_assets = fetch_total_assets(CONFIG["immich_url"], "people", person_id)
@@ -608,7 +668,7 @@ async def main_async():
             )
             logging.info(f"Downloaded {downloaded} images for person ID {person_id}.")
 
-        # Download for each album ID
+        # Album IDs
         for album_id in album_ids:
             logging.info(f"Processing downloads for album ID: {album_id}")
             total_assets = fetch_total_assets(CONFIG["immich_url"], "albums", album_id)
@@ -622,9 +682,18 @@ async def main_async():
             )
             logging.info(f"Downloaded {downloaded} images for album ID {album_id}.")
 
+    # Perform HEIC -> JPEG conversion if enabled
+ #   if CONFIG.get("enable_heic_conversion", True):
+ #       logging.info("Starting HEIC to JPEG conversion for downloaded images.")
+ #       convert_heic_files(output_dir)
+
     if CONFIG.get("enable_heic_conversion", True):
-        logging.info("Starting HEIC to JPEG conversion for downloaded images.")
-        convert_heic_files(CONFIG["output_dir"])
+        logging.info("Starting concurrent HEIC to JPEG conversion for downloaded images.")
+        await convert_heic_files_concurrently(CONFIG["output_dir"], max_workers=CONFIG["max_heic_conversion_workers"])
+
+    # Cleanup the thread pool
+    VALIDATION_EXECUTOR.shutdown(wait=True)
+    logging.info("Validation thread pool shut down.")
 
 if __name__ == "__main__":
     asyncio.run(main_async())
