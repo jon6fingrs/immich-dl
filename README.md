@@ -117,6 +117,8 @@ services:
       ENABLE_HEIC_CONVERSION: "true"
       MIN_DATE: "2020-01-01" #optional, Minimum date in YYYY-MM-DD format
       MAX_DATE: "2025-01-01" #optional, Maximum date in YYYY-MM-DD format
+      MAX_VALIDATION_WORKERS: 4 #default
+      MAX_HEIC_CONVERSION_WORKERS: 4 #default
     volumes:
       - ./downloads:/downloads
 ```
@@ -167,6 +169,8 @@ The script supports configurations via **YAML**, **environment variables**, or *
 | Enable HEIC Conversion     | `ENABLE_HEIC_CONVERSION`    | `enable_heic_conversion`   | N/A                      | Convert HEIC to JPEG. Defaults to true.                                                                                                                               |
 | Minimum Date               | `MIN_DATE`                  | `min_date`                 | N/A                      | Set minimum date for photo based off EXIF data.                                                                                                                       |
 | Maximum Date               | `MAX_DATE`                  | `max_date`                 | N/A                      | Set maximum date for photo based off EXIF data.                                                                                                                       |
+| Validation Workers         | `MAX_VALIDATION_WORKERS`    | `max_validation_workers`   | N/A                      | Default 4, number of concurrent image validations                                                                                                                       |
+| HEIC Conversion Workers    | `MAX_HEIC_CONVERSION_WORKERS` | `max_heic_conversion_workers` | N/A                 | Default 4, number of concurrent HEIC conversions                                                                                                                     |
 
 ---
 
@@ -218,6 +222,9 @@ enable_heic_conversion: true
 # Can add min or max dates. Will check based off EXIF data, first the date taken, or second, if unavailable, the date created. (optional)
 min_date: "2020-01-01"  # Minimum date in YYYY-MM-DD format
 max_date: "2025-01-01"  # Maximum date in YYYY-MM-DD format
+
+max_validation_workers: 4
+max_heic_conversion_workers: 4
 ```
 
 ---
