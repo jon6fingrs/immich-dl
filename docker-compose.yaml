@@ -23,5 +23,7 @@ services:
       ENABLE_HEIC_CONVERSION: "true" #default as shown
       MIN_DATE: "2020-01-01" #optional, Minimum date in YYYY-MM-DD format
       MAX_DATE: "2025-01-01" #optional, Maximum date in YYYY-MM-DD format
+      MAX_VALIDATION_WORKERS: 4 #default
+      MAX_HEIC_CONVERSION_WORKERS: 4 #default
     volumes:
       - ./downloads:/downloads # OUTPUT_DIR set to /downloads in Dockerfile since the volume mapping is all that matters, but could be modified with env variables
