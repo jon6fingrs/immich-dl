@@ -506,7 +506,7 @@ async def convert_heic_files_concurrently(
         Runs heif-convert on a single file, then removes the .heic if successful.
         """
         jpg_path = heic_path.rsplit(".", 1)[0]  # e.g., 'image' from 'image.heic'
-        cmd = f'heif-convert -v -o "{jpg_path}" "{heic_path}"'
+        cmd = f'heif-convert -o "{jpg_path}" "{heic_path}"'
         try:
             result = os.system(cmd)
             if result == 0:
