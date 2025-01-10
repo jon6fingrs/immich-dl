@@ -53,18 +53,19 @@ def load_config(config_file="config.yaml"):
         config["album_ids"] = json.loads(
             os.getenv("ALBUM_IDS", json.dumps(config.get("album_ids", [])))
         )
-        config["min_megapixels"] = float(
-            os.getenv("MIN_MEGAPIXELS", config.get("min_megapixels", 0))
-        )
         config["screenshot_dimensions"] = json.loads(
             os.getenv("SCREENSHOT_DIMENSIONS", json.dumps(config.get("screenshot_dimensions", [])))
         )
-        config["min_width"] = int(
-            os.getenv("MIN_WIDTH", config.get("min_width", 0))
-        )
-        config["min_height"] = int(
-            os.getenv("MIN_HEIGHT", config.get("min_height", 0))
-        )
+        
+        min_megapixels = os.getenv("MIN_MEGAPIXELS") or config.get("min_megapixels")
+        config["min_megapixels"] = float(min_megapixels) if min_megapixels is not None else None
+
+        min_width = os.getenv("MIN_WIDTH") or config.get("min_width")
+        config["min_width"] = int(min_width) if min_width is not None else None
+
+        min_height = os.getenv("MIN_HEIGHT") or config.get("min_height")
+        config["min_height"] = int(min_height) if min_height is not None else None
+        
         config["override"] = os.getenv("OVERRIDE", str(config.get("override", False))).lower() in ["true", "1"]
         config["max_parallel_downloads"] = int(
             os.getenv("MAX_PARALLEL_DOWNLOADS", config.get("max_parallel_downloads", 5))
