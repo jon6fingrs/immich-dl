@@ -390,21 +390,61 @@ def process_and_validate_image(file_path, config):
 
             # Orientation Correction
             image_modified = False
-            orientation = exif.get(274) if file_ext != "heic" else exif.get("exif:Orientation")
-            if orientation:
-                orientation = int(orientation)
-                if orientation == 3:  # Rotate 180 degrees
-                    img = img.rotate(180, expand=True)
-                    logging.info(f"Orientation corrected for {file_path}: Rotated 180 degrees.")
-                    image_modified = True
-                elif orientation == 6:  # Rotate 270 degrees (clockwise)
-                    img = img.rotate(270, expand=True)
-                    logging.info(f"Orientation corrected for {file_path}: Rotated 270 degrees clockwise.")
-                    image_modified = True
-                elif orientation == 8:  # Rotate 90 degrees (counter-clockwise)
-                    img = img.rotate(90, expand=True)
-                    logging.info(f"Orientation corrected for {file_path}: Rotated 90 degrees counter-clockwise.")
-                    image_modified = True
+
+            if file_ext == "heic":
+                # Check for Rotation and Orientation tags in HEIC files
+                rotation = exif.get("Rotation")
+                orientation = exif.get("exif:Orientation")
+
+                if rotation:
+                    rotation = int(rotation)
+                    if rotation == 180:  # Rotate 180 degrees
+                        img = img.rotate(180, expand=True)
+                        logging.info(f"Rotation corrected for {file_path}: Rotated 180 degrees.")
+                        image_modified = True
+                    elif rotation == 270:  # Rotate 270 degrees (clockwise)
+                        img = img.rotate(270, expand=True)
+                        logging.info(f"Rotation corrected for {file_path}: Rotated 270 degrees clockwise.")
+                        image_modified = True
+                    elif rotation == 90:  # Rotate 90 degrees (counter-clockwise)
+                        img = img.rotate(90, expand=True)
+                        logging.info(f"Rotation corrected for {file_path}: Rotated 90 degrees counter-clockwise.")
+                        image_modified = True
+
+                # Fallback to Orientation if Rotation tag is missing
+                elif orientation:
+                    orientation = int(orientation)
+                    if orientation == 3:  # Rotate 180 degrees
+                        img = img.rotate(180, expand=True)
+                        logging.info(f"Orientation corrected for {file_path}: Rotated 180 degrees.")
+                        image_modified = True
+                    elif orientation == 6:  # Rotate 270 degrees (clockwise)
+                        img = img.rotate(270, expand=True)
+                        logging.info(f"Orientation corrected for {file_path}: Rotated 270 degrees clockwise.")
+                        image_modified = True
+                    elif orientation == 8:  # Rotate 90 degrees (counter-clockwise)
+                        img = img.rotate(90, expand=True)
+                        logging.info(f"Orientation corrected for {file_path}: Rotated 90 degrees counter-clockwise.")
+                        image_modified = True
+
+            else:
+                # Check for EXIF Orientation tag for non-HEIC files
+                orientation = exif.get(274)
+                if orientation:
+                    orientation = int(orientation)
+                    if orientation == 3:  # Rotate 180 degrees
+                        img = img.rotate(180, expand=True)
+                        logging.info(f"Orientation corrected for {file_path}: Rotated 180 degrees.")
+                        image_modified = True
+                    elif orientation == 6:  # Rotate 270 degrees (clockwise)
+                        img = img.rotate(270, expand=True)
+                        logging.info(f"Orientation corrected for {file_path}: Rotated 270 degrees clockwise.")
+                        image_modified = True
+                    elif orientation == 8:  # Rotate 90 degrees (counter-clockwise)
+                        img = img.rotate(90, expand=True)
+                        logging.info(f"Orientation corrected for {file_path}: Rotated 90 degrees counter-clockwise.")
+                        image_modified = True
+
 
             # Save modified image
             if image_modified:
