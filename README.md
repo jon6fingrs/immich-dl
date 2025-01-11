@@ -85,7 +85,7 @@ docker run --rm \
   -e MIN_HEIGHT=800 \
   -e SCREENSHOT_DIMENSIONS='[[1170, 2532], [1920, 1080]]' \
   -e MAX_PARALLEL_DOWNLOADS=5 \
-  -e OVERRIDE=true \
+  -e OVERRIDE=false \
   -e DRY_RUN=false \
   -e ENABLE_HEIC_CONVERSION=true \
   -v ./downloads:/downloads \
@@ -112,7 +112,7 @@ services:
       MIN_HEIGHT: 800 #optional, no default
       SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]'
       MAX_PARALLEL_DOWNLOADS: "5"
-      OVERRIDE: "true"
+      OVERRIDE: "false"
       DRY_RUN: "false"
       ENABLE_HEIC_CONVERSION: "true"
       MIN_DATE: "2020-01-01" #optional, Minimum date in YYYY-MM-DD format
