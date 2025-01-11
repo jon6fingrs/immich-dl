@@ -25,6 +25,7 @@ register_heif_opener()
 CONFIG = {}
 supports_atomic_write = False
 VALIDATION_EXECUTOR = None  # We'll assign a real thread pool in main_async
+HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION = False
 
 # ------------------------------
 # 1. Configuration and Logging
@@ -126,6 +127,41 @@ def setup_logging():
     )
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(file_handler)
+
+def check_heif_convert_support():
+    """
+    Checks if 'heif-convert' is installed and supports the '-o' or '--output' option.
+    Updates the global variable accordingly.
+    """
+    global HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION
+
+    # Check if 'heif-convert' is installed
+    heif_convert_path = shutil.which('heif-convert')
+    if heif_convert_path is None:
+        logging.error("'heif-convert' command not found. Disabling HEIC conversion.")
+        return False
+
+    try:
+        # Execute 'heif-convert --help' and capture its output
+        result = subprocess.run(
+            ['heif-convert', '--help'],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            help_output = result.stdout
+            # Check if '-o' or '--output' is mentioned in the help output
+            if '-o, --output' in help_output:
+                HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION = True
+            else:
+                HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION = False
+            return True
+        else:
+            logging.error("Failed to execute 'heif-convert --help'.")
+            return False
+    except Exception as e:
+        logging.error(f"An error occurred while checking 'heif-convert' support: {e}")
+        return False
 
 # ------------------------------
 # 2. Directory Management
@@ -507,7 +543,13 @@ async def convert_heic_files_concurrently(
         Runs heif-convert on a single file, then removes the .heic if successful.
         """
         jpg_path = heic_path.rsplit(".", 1)[0]  # e.g., 'image' from 'image.heic'
-        cmd = f'heif-convert "{heic_path}" "{jpg_path}".jpg'
+        
+        
+        if HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION:
+            cmd = f'heif-convert -v -o "{jpg_path}".jpg "{heic_path}"'
+        else:
+            cmd = f'heif-convert "{heic_path}" "{jpg_path}".jpg'
+        
         try:
             result = os.system(cmd)
             if result == 0:
@@ -687,6 +729,11 @@ async def main_async():
  #   if CONFIG.get("enable_heic_conversion", True):
  #       logging.info("Starting HEIC to JPEG conversion for downloaded images.")
  #       convert_heic_files(output_dir)
+
+    if config.get("enable_heic_conversion", True):
+        heif_convert_available = check_heif_convert_support()
+        if not heif_convert_available:
+            config["enable_heic_conversion"] = False
 
     if CONFIG.get("enable_heic_conversion", True):
         logging.info("Starting concurrent HEIC to JPEG conversion for downloaded images.")
