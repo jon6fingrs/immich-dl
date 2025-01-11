@@ -730,10 +730,10 @@ async def main_async():
  #       logging.info("Starting HEIC to JPEG conversion for downloaded images.")
  #       convert_heic_files(output_dir)
 
-    if config.get("enable_heic_conversion", True):
+    if CONFIG.get("enable_heic_conversion", True):
         heif_convert_available = check_heif_convert_support()
         if not heif_convert_available:
-            config["enable_heic_conversion"] = False
+            CONFIG["enable_heic_conversion"] = False
 
     if CONFIG.get("enable_heic_conversion", True):
         logging.info("Starting concurrent HEIC to JPEG conversion for downloaded images.")
