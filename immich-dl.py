@@ -492,18 +492,19 @@ def _extract_exif_from_heic(file_path):
         logging.error(f"Error extracting EXIF data from HEIC file {file_path}: {e}")
         return {}
 
-def update_heic_orientation_with_exiftool(file_path, orientation=1):
+def update_heic_orientation_with_exiftool(file_path):
     """
-    Updates the EXIF orientation tag for HEIC images using exiftool.
+    Resets the rotation and removes the orientation metadata for HEIC images using exiftool.
     """
     try:
+        # Command to reset Rotation and remove Orientation
         subprocess.run(
-            ["exiftool", f"-Orientation={orientation}", "-overwrite_original", file_path],
+            ["exiftool", "-m", "-Rotation=0", "-Orientation=", "-overwrite_original", file_path],
             check=True
         )
-        logging.info(f"Updated EXIF orientation for HEIC file {file_path} to {orientation}.")
+        logging.info(f"Reset Rotation and removed Orientation metadata for HEIC file: {file_path}")
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to update EXIF orientation for {file_path}: {e}")
+        logging.error(f"Failed to update Rotation/Orientation for {file_path}: {e}")
 
 
 def convert_heic_files(output_dir):
