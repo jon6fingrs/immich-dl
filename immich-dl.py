@@ -492,28 +492,33 @@ async def convert_heic_files_concurrently(
         return
 
     loop = asyncio.get_running_loop()
-
     def convert_single_heic(heic_path):
         """
         Runs heif-convert on a single file, then removes the .heic if successful.
         """
-        jpg_path = heic_path.rsplit(".", 1)[0]  # e.g., 'image' from 'image.heic'
+        jpg_path = os.path.splitext(heic_path)[0] + ".jpg"
         
         
         if HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION:
-            cmd = f'heif-convert -v -o "{jpg_path}".jpg "{heic_path}"'
+            cmd = (
+                f'heif-convert -v "{heic_path}" || '
+                f'(mv "{heic_path}" "{jpg_path}")'
+            )
         else:
-            cmd = f'heif-convert "{heic_path}" "{jpg_path}".jpg'
+            cmd = f'heif-convert "{heic_path}" "{jpg_path}"'
         
         try:
             result = os.system(cmd)
+            if not os.path.exists(jpg_path):
+                os.rename(heic_path, jpg_path)
+
             if result == 0:
                 subprocess.run(
-                    ["exiftool", "-overwrite_original_in_place", "-Orientation=", f"{jpg_path}.jpg"],
+                    ["exiftool", "-overwrite_original_in_place", "-Orientation=", f"{jpg_path}"],
                     check=True
                 )
                 os.remove(heic_path)
-                logging.info(f"Converted {heic_path} to {jpg_path}.jpg")
+                logging.info(f"Converted {heic_path} to {jpg_path}")
             else:
                 logging.error(f"HEIC to JPEG conversion failed for {heic_path}")
         except Exception as e:
