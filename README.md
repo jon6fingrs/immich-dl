@@ -1,7 +1,9 @@
 
 # Immich Downloader
 
-Immich Downloader is a flexible script to download images from an Immich server. It allows users to specify configurations via YAML, environment variables, or command-line arguments. The script supports validation, safety checks, and can be run on bare metal or as a Docker container. You likely need to set up someway to schedule this.
+Immich Downloader pulls a random selection of images from an Immich server into a local folder. You can pick images of specific people, from specific albums, or from your whole library, and filter out screenshots, small images and photos outside a date range. Configure it with YAML, environment variables or command-line flags, and run it on bare metal or in Docker. It does one run and exits, so schedule it with cron or similar (see [Scheduling](#scheduling)).
+
+Works with Immich v2.0 and newer, including the v3.2+ search API.
 
 ---
 
@@ -13,12 +15,25 @@ My entertainment center is run on a kodi box. I have wanted for a long time to s
 
 ## Features
 
-- Download images by **person ID**, **album ID**, or from the general pool.
-- Validate downloaded images for resolution, aspect ratio, screenshots
-- Safety checks for the download directory.
-- Configurable via YAML, environment variables, or command-line flags.
-- Log rotation for efficient debugging.
-- Asyncio for a significant speed improvement
+- Random images by **person ID**, **album ID**, or from the whole library, using Immich's random search, so every photo has the same chance of being picked.
+- Filters by size, megapixels, screenshot dimensions, date and archive status. These run on Immich's metadata before downloading, so rejected images are never downloaded.
+- Safe replacement: the new selection is downloaded into a hidden staging folder and swapped in at the end. Kodi never sees an empty or half-filled folder, and if Immich is unreachable the previous selection stays.
+- Converts HEIC/AVIF/WebP/TIFF to JPEG with the correct rotation. RAW files are fetched as Immich's full-size JPEG.
+- Downloads the edited version of photos you've edited in Immich (Immich 2.5+).
+- Optional location captions: writes the place (e.g. "Boston, Massachusetts") from Immich's own reverse geocoding into the IPTC caption, which Kodi's Picture Slideshow screensaver can show. No Nominatim server needed.
+- Safety marker so it never wipes a folder it didn't create (unless overridden), and a dry-run mode.
+
+---
+
+## Immich API key
+
+Create an API key in Immich under **Account Settings → API Keys**. If you give it limited permissions, it needs:
+
+- `asset.read` (random search)
+- `asset.download` (original files)
+- `asset.view` (full-size renditions of RAW files)
+
+Person and album IDs are the last part of the URL when you open the person or album in the Immich web UI.
 
 ---
 
@@ -30,202 +45,139 @@ My entertainment center is run on a kodi box. I have wanted for a long time to s
    git clone https://github.com/jon6fingrs/immich-dl.git
    cd immich-dl
    ```
-2. Install System Dependencies:
 
-   Before installing Python dependencies, make sure you have the required system libraries:
+2. Install exiftool (only needed for location captions):
 
    ```bash
-
-   sudo apt-get update && sudo apt-get install -y \
-       libjpeg-dev \
-       zlib1g-dev \
-       libheif-dev \
-       libheif-examples \
-       imagemagick \
-       libimage-exiftool-perl \
-       python3-pip
+   sudo apt-get install -y libimage-exiftool-perl
    ```
 
-4. Install Python dependencies:
+3. Install the Python dependencies (Python 3.9+):
 
    ```bash
    pip install -r requirements.txt
    ```
 
-5. Create a configuration file `config.yaml` (see example below).
+4. Copy `config.yaml.example` to `config.yaml` and fill it in.
 
-6. Run the script:
+5. Run it:
 
    ```bash
-   python3 immich-dl.py
+   python3 immich-dl.py                 # uses ./config.yaml
+   python3 immich-dl.py --dry-run       # show what would be downloaded
+   python3 immich-dl.py --config /etc/immich-dl.yaml --output-dir /srv/kodi/screensaver
    ```
 
-7. You can override any configuration via environment variables or command-line flags.
+Any option can be overridden with an environment variable.
 
 ---
 
 ## Running with Docker
 
-### Using the Prebuilt Docker Image
+The prebuilt image is on Docker Hub: [thehelpfulidiot/immich-dl](https://hub.docker.com/r/thehelpfulidiot/immich-dl).
 
-The prebuilt image is available on Docker Hub: [thehelpfulidiot/immich-dl](https://hub.docker.com/repository/docker/thehelpfulidiot/immich-dl/general).
-
-#### Example `docker run` Command
+### `docker run`
 
 ```bash
 docker run --rm \
-  -e IMMICH_URL=http://your-immich-instance-url \
-  -e API_KEY=your-api-key-here \
-  -e OUTPUT_DIR=/downloads \
-  -e TOTAL_IMAGES_TO_DOWNLOAD=5 \
+  -e IMMICH_URL=http://your-immich-server:2283 \
+  -e API_KEY=your-api-key \
+  -e TOTAL_IMAGES_TO_DOWNLOAD=200 \
   -e PERSON_IDS='["person-id-1", "person-id-2"]' \
-  -e ALBUM_IDS='["album-id-1", "album-id-2"]' \
-  -e MIN_MEGAPIXELS=2.0 \
   -e MIN_WIDTH=1000 \
   -e MIN_HEIGHT=800 \
   -e SCREENSHOT_DIMENSIONS='[[1170, 2532], [1920, 1080]]' \
-  -e MAX_PARALLEL_DOWNLOADS=5 \
-  -e OVERRIDE=false \
-  -e DRY_RUN=false \
-  -e ENABLE_HEIC_CONVERSION=true \
-  -v ./downloads:/downloads \
+  -e WRITE_LOCATION_CAPTION=true \
+  -v /path/to/kodi/screensaver:/downloads \
   thehelpfulidiot/immich-dl:latest
 ```
 
-#### Example `docker-compose.yaml`
+### Docker Compose
+
+See [`docker-compose.yaml`](docker-compose.yaml) for every option. Then:
+
+```bash
+docker compose run --rm immich-dl
+```
+
+To use a YAML file instead of environment variables, mount it and point `CONFIG_FILE` at it:
 
 ```yaml
-version: "3.9"
-services:
-  immich-dl:
-    image: thehelpfulidiot/immich-dl:latest
-    container_name: immich-downloader
     environment:
-      IMMICH_URL: "http://your-immich-instance-url"
-      API_KEY: "your-api-key-here"
-      OUTPUT_DIR: "/downloads" #env set to this in dockerfile
-      TOTAL_IMAGES_TO_DOWNLOAD: "5"
-      PERSON_IDS: '["person-id-1", "person-id-2"]'
-      ALBUM_IDS: '["album-id-1", "album-id-2"]'
-      MIN_MEGAPIXELS: "2.0" #optional, no default
-      MIN_WIDTH: 1000 #optional, no default
-      MIN_HEIGHT: 800 #optional, no default
-      SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]'
-      MAX_PARALLEL_DOWNLOADS: "5"
-      OVERRIDE: "false"
-      DRY_RUN: "false"
-      ENABLE_HEIC_CONVERSION: "true"
-      MIN_DATE: "2020-01-01" #optional, Minimum date in YYYY-MM-DD format
-      MAX_DATE: "2025-01-01" #optional, Maximum date in YYYY-MM-DD format
-      MAX_VALIDATION_WORKERS: 4 #default
-      MAX_HEIC_CONVERSION_WORKERS: 4 #default
+      CONFIG_FILE: /config/config.yaml
     volumes:
+      - ./config.yaml:/config/config.yaml:ro
       - ./downloads:/downloads
+```
+
+### Building the image locally
+
+```bash
+docker build -t immich-dl:latest .
 ```
 
 ---
 
-## Building the Docker Image Locally
+## Scheduling
 
-1. Build the image:
+The script does one run and exits. For example, to refresh the selection every night at 3am, add this to your crontab (`crontab -e`):
 
-   ```bash
-   docker build -t immich-dl:latest .
-   ```
+```cron
+0 3 * * * cd /path/to/immich-dl && python3 immich-dl.py >> /var/log/immich-dl.cron.log 2>&1
+```
 
-2. Run the container:
+or with Docker Compose:
 
-   ```bash
-   docker run --rm \
-     -e IMMICH_URL=http://10.0.0.181:2283 \
-     -e API_KEY=<your-api-key> \
-     -e PERSON_IDS='["person-id-1","person-id-2"]' \
-     -e TOTAL_IMAGES_TO_DOWNLOAD=5 \
-     -v /path/to/downloads:/downloads \
-     immich-dl:latest
-   ```
+```cron
+0 3 * * * cd /path/to/immich-dl && docker compose run --rm immich-dl
+```
+
+The script exits with a non-zero code if it couldn't download anything (the previous images are kept), so cron's error mail or your monitoring will notice.
+
+---
+
+## Kodi setup
+
+1. Point the output folder at a location Kodi can read (a local folder, or an SMB/NFS share).
+2. In Kodi, go to **Settings → Interface → Screensaver**, choose **Picture Slideshow**, set the source to **Image folder** and pick the folder.
+3. To show the location, set `WRITE_LOCATION_CAPTION=true` and turn on the screensaver's option to display the image caption/info.
+
+The staging folder (`.immich-dl-staging`) is hidden, so Kodi ignores it unless "Show hidden files" is on.
 
 ---
 
 ## Configuration Options
 
-The script supports configurations via **YAML**, **environment variables**, or **command-line arguments**. Below is a comprehensive table of options:
+Every option can be set in YAML, or as an environment variable with the same name in upper case. Environment variables win over YAML.
 
-| **Option**                 | **Environment Variable**      | **YAML Key**                | **Command-Line Flag**    | **Description**                                                                                                                                                             |
-|----------------------------|-------------------------------|-----------------------------|--------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Immich Server URL          | `IMMICH_URL`                 | `immich_url`               | N/A                      | Base URL of the Immich instance.                                                                                                                                       |
-| API Key                    | `API_KEY`                    | `api_key`                  | N/A                      | API key for authentication.                                                                                                                                            |
-| Output Directory           | `OUTPUT_DIR`                 | `output_dir`               | `--output-dir`           | Directory where images will be downloaded.                                                                                                                             |
-| Total Images to Download   | `TOTAL_IMAGES_TO_DOWNLOAD`   | `total_images_to_download` | N/A                      | Number of images to download per person or album.                                                                                                                      |
-| Person IDs                 | `PERSON_IDS`                 | `person_ids`               | N/A                      | JSON list of person IDs.                                                                                                                                               |
-| Album IDs                  | `ALBUM_IDS`                  | `album_ids`                | N/A                      | JSON list of album IDs.                                                                                                                                                |
-| Minimum Megapixels         | `MIN_MEGAPIXELS`             | `min_megapixels`           | N/A                      | Minimum megapixels for images to be downloaded.                                                                                                                       |
-| Minimum Width              | `MIN_WIDTH`                  | `min_width`                | N/A                      | Minimum width for images (after orientation corrected)                                                                                                                |
-| Minimum Height             | `MIN_HEIGHT`                 | `min_height`               | N/A                      | Minimum height for images (after orientation corrected)                                                                                                               |
-| Screenshot Dimensions      | `SCREENSHOT_DIMENSIONS`      | `screenshot_dimensions`    | N/A                      | JSON list of dimensions to exclude (e.g., screenshots).                                                                                                               |
-| Max Parallel Downloads     | `MAX_PARALLEL_DOWNLOADS`     | `max_parallel_downloads`   | N/A                      | Maximum number of parallel downloads.                                                                                                                                 |
-| Override Safety Check      | `OVERRIDE`                  | `override`                 | `--override`             | Override safety checks for the directory.                                                                                                                             |
-| Dry Run                    | `DRY_RUN`                   | `dry_run`                  | N/A                      | Simulate downloads without saving files.                                                                                                                              |
-| Enable HEIC Conversion     | `ENABLE_HEIC_CONVERSION`    | `enable_heic_conversion`   | N/A                      | Convert HEIC to JPEG. Defaults to true.                                                                                                                               |
-| Minimum Date               | `MIN_DATE`                  | `min_date`                 | N/A                      | Set minimum date for photo based off EXIF data.                                                                                                                       |
-| Maximum Date               | `MAX_DATE`                  | `max_date`                 | N/A                      | Set maximum date for photo based off EXIF data.                                                                                                                       |
-| Validation Workers         | `MAX_VALIDATION_WORKERS`    | `max_validation_workers`   | N/A                      | Default 4, number of concurrent image validations                                                                                                                       |
-| HEIC Conversion Workers    | `MAX_HEIC_CONVERSION_WORKERS` | `max_heic_conversion_workers` | N/A                 | Default 4, number of concurrent HEIC conversions                                                                                                                     |
+| **Option** | **Environment Variable** | **YAML Key** | **Flag** | **Description** |
+|---|---|---|---|---|
+| Immich Server URL | `IMMICH_URL` | `immich_url` | | Base URL of the Immich server. **Required.** |
+| API Key | `API_KEY` | `api_key` | | Immich API key. **Required.** |
+| Config File | `CONFIG_FILE` | | `--config` | Path to the YAML file. Default `config.yaml`. |
+| Output Directory | `OUTPUT_DIR` | `output_dir` | `--output-dir` | Folder for the images. Its contents are replaced each run. Default `/downloads`. |
+| Images to Download | `TOTAL_IMAGES_TO_DOWNLOAD` | `total_images_to_download` | | Number of images per person and per album, or from the whole library. Default 10. |
+| Person IDs | `PERSON_IDS` | `person_ids` | | JSON list of person IDs. |
+| Album IDs | `ALBUM_IDS` | `album_ids` | | JSON list of album IDs (your own or shared with you). |
+| Minimum Megapixels | `MIN_MEGAPIXELS` | `min_megapixels` | | Skip images below this many megapixels. |
+| Minimum Width | `MIN_WIDTH` | `min_width` | | Skip images narrower than this, measured after rotation. |
+| Minimum Height | `MIN_HEIGHT` | `min_height` | | Skip images shorter than this, measured after rotation. |
+| Screenshot Dimensions | `SCREENSHOT_DIMENSIONS` | `screenshot_dimensions` | | JSON list of `[width, height]`. Images of exactly that size with no camera make are skipped. |
+| Minimum Date | `MIN_DATE` | `min_date` | | Only photos taken on or after this date (`YYYY-MM-DD`). |
+| Maximum Date | `MAX_DATE` | `max_date` | | Only photos taken on or before this date (`YYYY-MM-DD`). |
+| Include Archived | `INCLUDE_ARCHIVED` | `include_archived` | | Also pick archived photos. Default false. |
+| Use Edited Versions | `USE_EDITED` | `use_edited` | | Download the edited version of photos edited in Immich (Immich 2.5+). Default true. |
+| Convert to JPEG | `ENABLE_HEIC_CONVERSION` | `enable_heic_conversion` | | Convert HEIC/AVIF/WebP/TIFF to JPEG. Default true. |
+| Location Captions | `WRITE_LOCATION_CAPTION` | `write_location_caption` | | Write the photo's location into the IPTC caption. Requires exiftool. Default false. |
+| Countries Left Out of Captions | `CAPTION_OMIT_COUNTRIES` | `caption_omit_countries` | | JSON list. Default `["United States of America", "United States"]`. |
+| Max Parallel Downloads | `MAX_PARALLEL_DOWNLOADS` | `max_parallel_downloads` | | Default 5. |
+| Validation Workers | `MAX_VALIDATION_WORKERS` | `max_validation_workers` | | Threads for checking and converting images. Default 4. |
+| Request Timeout | `REQUEST_TIMEOUT` | `request_timeout` | | Seconds to wait for data from Immich. Default 300. |
+| Override Safety Check | `OVERRIDE` | `override` | `--override` | Replace the folder's contents even without the marker file. Default false. |
+| Dry Run | `DRY_RUN` | `dry_run` | `--dry-run` | Log what would be downloaded without changing anything. Default false. |
+| Log File | `LOG_FILE` | | | Rotating log file. Default `immich_downloader.log`; set empty to disable. |
 
----
-
-## Configuration Example: `config.yaml`
-
-```yaml
-# URL of your Immich instance
-immich_url: "http://your-immich-instance-url"
-
-# API Key for authentication
-api_key: "your-api-key"
-
-# Directory to save downloaded images
-output_dir: "/path/to/downloads"
-
-# Number of images to download per person/album
-total_images_to_download: 10
-
-# List of Person IDs (optional)
-person_ids: []
-
-# List of Album IDs (optional)
-album_ids: []
-
-# Minimum megapixels for images (optional)
-min_megapixels: 2.0
-
-# Minimum dimensions for images
-min_width: 1024      # Set to null or remove this line to disable the width check
-min_height: 768      # Set to null or remove this line to disable the height check
-
-# Screenshot dimensions to exclude (optional)
-screenshot_dimensions:
-  - [1170, 2532]  # iPhone screenshot
-  - [1920, 1080]  # Desktop screenshot
-
-# Maximum parallel downloads (optional)
-max_parallel_downloads: 5
-
-# Override safety check for the directory (optional)
-override: false
-
-# Dry-run mode (optional)
-dry_run: false
-
-# Convert HEIC to JPEG (optional)
-enable_heic_conversion: true
-
-# Can add min or max dates. Will check based off EXIF data, first the date taken, or second, if unavailable, the date created. (optional)
-min_date: "2020-01-01"  # Minimum date in YYYY-MM-DD format
-max_date: "2025-01-01"  # Maximum date in YYYY-MM-DD format
-
-max_validation_workers: 4
-max_heic_conversion_workers: 4
-```
+`MAX_HEIC_CONVERSION_WORKERS` from older versions is no longer used and is ignored.
 
 ---
 

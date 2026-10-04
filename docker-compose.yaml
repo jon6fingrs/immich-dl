@@ -1,29 +1,28 @@
-version: "3.9"
-
 services:
-  immich_downloader:
-    build:
-      context: .
-      dockerfile: Dockerfile
-#    image: thehelpfulidiot/immich-dl:latest
-    container_name: immich_downloader
+  immich-dl:
+    image: thehelpfulidiot/immich-dl:latest
+    # build: .  # uncomment (and comment out image) to build locally
+    container_name: immich-dl
     environment:
-      IMMICH_URL: "immich-url" #necessary
-      API_KEY: "api-key" #necessary
-      TOTAL_IMAGES_TO_DOWNLOAD: 20 #necessary
-      PERSON_IDS: '["person-id-1", "person-id-2"]'
-      ALBUM_IDS: '["album-id-1", "album-id-2"]' #optional, will pull from whole library if album_id and person_id are blank
-      MIN_MEGAPIXELS: 2.0 #optional, no default
-      MIN_WIDTH: 1000 #optional, no default
-      MIN_HEIGHT: 800 #optional, no default
-      SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]' #optional, no default
-      OVERRIDE: "false" #default as shown
-      MAX_PARALLEL_DOWNLOADS: 5 #default as shown
-      DRY_RUN: "false" #default as shown
-      ENABLE_HEIC_CONVERSION: "true" #default as shown
-      MIN_DATE: "2020-01-01" #optional, Minimum date in YYYY-MM-DD format
-      MAX_DATE: "2025-01-01" #optional, Maximum date in YYYY-MM-DD format
-      MAX_VALIDATION_WORKERS: 4 #default
-      MAX_HEIC_CONVERSION_WORKERS: 4 #default
+      IMMICH_URL: "http://your-immich-server:2283" # required
+      API_KEY: "your-api-key" # required; needs asset.read, asset.view and asset.download
+      TOTAL_IMAGES_TO_DOWNLOAD: 20 # per person/album, or from the whole library if none are set
+      PERSON_IDS: '["person-id-1", "person-id-2"]' # optional
+      ALBUM_IDS: '["album-id-1", "album-id-2"]' # optional
+      MIN_MEGAPIXELS: 2.0 # optional
+      MIN_WIDTH: 1000 # optional
+      MIN_HEIGHT: 800 # optional
+      SCREENSHOT_DIMENSIONS: '[[1170, 2532], [1920, 1080]]' # optional
+      MIN_DATE: "2020-01-01" # optional, YYYY-MM-DD
+      MAX_DATE: "2025-12-31" # optional, YYYY-MM-DD, inclusive
+      INCLUDE_ARCHIVED: "false" # default
+      USE_EDITED: "true" # default; Immich 2.5+ serves edited versions
+      WRITE_LOCATION_CAPTION: "false" # default; shows the place in Kodi's slideshow
+      ENABLE_HEIC_CONVERSION: "true" # default
+      MAX_PARALLEL_DOWNLOADS: 5 # default
+      MAX_VALIDATION_WORKERS: 4 # default
+      OVERRIDE: "false" # default
+      DRY_RUN: "false" # default
+      TZ: "America/New_York" # optional, for log timestamps
     volumes:
-      - ./downloads:/downloads # OUTPUT_DIR set to /downloads in Dockerfile since the volume mapping is all that matters, but could be modified with env variables
+      - ./downloads:/downloads

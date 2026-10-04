@@ -1,711 +1,598 @@
-import os
-import requests
-import logging
-import random
-from PIL import Image
+#!/usr/bin/env python3
+"""
+Immich Downloader
+
+Pulls a random selection of images from an Immich server into a local folder
+(e.g. for the Kodi Picture Slideshow screensaver). Each run replaces the
+previous selection; the swap only happens once the new set has been
+downloaded, so the folder is never left empty while a run is in progress or
+when the server is unreachable.
+"""
+
 import argparse
-import yaml
-import shutil
-import json
-from logging.handlers import RotatingFileHandler
-import aiohttp
-import aiofiles
 import asyncio
-from asyncio import Semaphore, Lock
+import concurrent.futures
+import json
+import logging
+import os
+import shutil
 import subprocess
+import sys
+from datetime import datetime, timedelta
+from logging.handlers import RotatingFileHandler
+
+import aiohttp
+import yaml
+from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
-import glob
-import piexif
-from datetime import datetime
-import concurrent.futures  # <-- Added for concurrent validation
 
 register_heif_opener()
 
-# Global references
-CONFIG = {}
-supports_atomic_write = False
-VALIDATION_EXECUTOR = None  # We'll assign a real thread pool in main_async
-HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION = False
-ORIENTATION_MAP = {
-    "Rotate 90 CW": 270,
-    "Rotate 180": 180,
-    "Rotate 270 CW": 90,
-    "Normal": 0,
+MARKER_NAME = ".script_marker"
+STAGING_NAME = ".immich-dl-staging"
+
+# Formats Kodi displays natively; anything else is converted to JPEG.
+KODI_FORMATS = {"JPEG", "PNG", "GIF"}
+# Extensions Pillow (+ pillow-heif) can decode. Originals with any other
+# extension (RAW files such as DNG/CR2/NEF) are fetched as Immich's
+# full-size JPEG rendition instead.
+PILLOW_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".heic", ".heif", ".hif", ".avif",
+    ".webp", ".tif", ".tiff", ".bmp",
 }
+# EXIF orientations that swap width and height.
+ROTATED_ORIENTATIONS = {"5", "6", "7", "8"}
+EXIF_ORIENTATION_TAG = 0x0112
+EXIF_MAKE_TAG = 0x010F
+
+# Immich server versions that changed the API this script relies on.
+EDITED_PARAM_VERSION = (2, 5, 0)  # ?edited=true on /assets/{id}/original
+FILTER_API_VERSION = (3, 2, 0)  # "filter" object on /search/random
+
+SEARCH_BATCH_MAX = 1000  # Immich caps /search/random at 1000 results
+MAX_EMPTY_ROUNDS = 3  # stop asking for more once the pool is exhausted
+
 
 # ------------------------------
 # 1. Configuration and Logging
 # ------------------------------
 
-def load_config(config_file="config.yaml"):
-    try:
-        # Load configuration from YAML file
-        try:
-            with open(config_file, "r") as f:
-                config = yaml.safe_load(f) or {}  # Load YAML or default to empty dictionary
-        except FileNotFoundError:
-            logging.warning(f"Configuration file {config_file} not found. Proceeding with environment variables only.")
-            config = {}
-
-        # Populate configuration with environment variables or default values
-        config["immich_url"] = os.getenv("IMMICH_URL", config.get("immich_url", ""))
-        config["api_key"] = os.getenv("API_KEY", config.get("api_key", ""))
-        config["output_dir"] = os.getenv("OUTPUT_DIR", config.get("output_dir", "/downloads"))
-        config["total_images_to_download"] = int(
-            os.getenv("TOTAL_IMAGES_TO_DOWNLOAD", config.get("total_images_to_download", 10))
-        )
-        config["person_ids"] = json.loads(
-            os.getenv("PERSON_IDS", json.dumps(config.get("person_ids", [])))
-        )
-        config["album_ids"] = json.loads(
-            os.getenv("ALBUM_IDS", json.dumps(config.get("album_ids", [])))
-        )
-        config["screenshot_dimensions"] = json.loads(
-            os.getenv("SCREENSHOT_DIMENSIONS", json.dumps(config.get("screenshot_dimensions", [])))
-        )
-        
-        min_megapixels = os.getenv("MIN_MEGAPIXELS") or config.get("min_megapixels")
-        config["min_megapixels"] = float(min_megapixels) if min_megapixels is not None else None
-
-        min_width = os.getenv("MIN_WIDTH") or config.get("min_width")
-        config["min_width"] = int(min_width) if min_width is not None else None
-
-        min_height = os.getenv("MIN_HEIGHT") or config.get("min_height")
-        config["min_height"] = int(min_height) if min_height is not None else None
-        
-        config["override"] = os.getenv("OVERRIDE", str(config.get("override", False))).lower() in ["true", "1"]
-        config["max_parallel_downloads"] = int(
-            os.getenv("MAX_PARALLEL_DOWNLOADS", config.get("max_parallel_downloads", 5))
-        )
-        config["dry_run"] = os.getenv("DRY_RUN", str(config.get("dry_run", False))).lower() in ["true", "1"]
-        config["enable_heic_conversion"] = os.getenv(
-            "ENABLE_HEIC_CONVERSION", str(config.get("enable_heic_conversion", True))
-        ).lower() in ["true", "1"]
-
-        # Parse min_date and max_date
-        min_date_str = os.getenv("MIN_DATE", config.get("min_date"))
-        max_date_str = os.getenv("MAX_DATE", config.get("max_date"))
-
-        config["min_date"] = (
-            datetime.strptime(min_date_str, "%Y-%m-%d") if min_date_str else None
-        )
-        config["max_date"] = (
-            datetime.strptime(max_date_str, "%Y-%m-%d") if max_date_str else None
-        )
-
-        config["max_validation_workers"] = int(
-            os.getenv("MAX_VALIDATION_WORKERS", config.get("max_validation_workers", 4))
-        )
-        config["max_heic_conversion_workers"] = int(
-            os.getenv("MAX_HEIC_CONVERSION_WORKERS", config.get("max_heic_conversion_workers", 4))
-        )
-        
-        # Validate essential keys
-        if not config["immich_url"] or not config["api_key"]:
-            raise ValueError("Both IMMICH_URL and API_KEY must be specified, either in the YAML file or as environment variables.")
-
-        logging.info(f"Configuration loaded: {config}")  # Log the final config
-        return config
-
-    except (yaml.YAMLError, ValueError, json.JSONDecodeError) as e:
-        logging.error(f"Error parsing config file or environment variables: {e}")
-        raise
-
-def setup_logging():
-    """
-    Configure logging with log rotation.
-    """
-    log_file = "immich_downloader.log"
-    max_log_size = 5 * 1024 * 1024  # 5 MB
-    backup_count = 3  # Keep 3 backup files
-
+def setup_logging(log_file):
+    """Log to the console and to a rotating log file."""
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    # Stream handler for console output
     stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
 
-    # Rotating file handler for log file
-    file_handler = RotatingFileHandler(
-        log_file, maxBytes=max_log_size, backupCount=backup_count
-    )
-    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-    logger.addHandler(file_handler)
+    if log_file:
+        try:
+            file_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        except OSError as e:
+            logging.warning(f"Cannot write log file {log_file}: {e}")
 
-def check_heif_convert_support():
-    """
-    Checks if 'heif-convert' is installed and supports the '-o' or '--output' option.
-    Updates the global variable accordingly.
-    """
-    global HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION
 
-    # Check if 'heif-convert' is installed
-    heif_convert_path = shutil.which('heif-convert')
-    if heif_convert_path is None:
-        logging.error("'heif-convert' command not found. Disabling HEIC conversion.")
-        return False
+def _setting(yaml_config, key, default=None):
+    """Environment variable (upper-case key) wins over YAML, which wins over the default."""
+    env_value = os.getenv(key.upper())
+    if env_value is not None and env_value != "":
+        return env_value
+    value = yaml_config.get(key)
+    return default if value is None else value
 
+
+def _as_bool(value):
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
+def _as_list(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    return list(value or [])
+
+
+def _as_optional(value, cast):
+    return cast(value) if value not in (None, "") else None
+
+
+def _as_date(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value
+    return datetime.strptime(str(value), "%Y-%m-%d")
+
+
+def load_config(config_file):
     try:
-        # Execute 'heif-convert --help' and capture its output
-        result = subprocess.run(
-            ['heif-convert', '--help'],
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0:
-            help_output = result.stdout
-            # Check if '-o' or '--output' is mentioned in the help output
-            if '-o, --output' in help_output:
-                HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION = True
-            else:
-                HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION = False
-            return True
-        else:
-            logging.error("Failed to execute 'heif-convert --help'.")
-            return False
-    except Exception as e:
-        logging.error(f"An error occurred while checking 'heif-convert' support: {e}")
-        return False
+        with open(config_file, "r") as f:
+            yaml_config = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        logging.info(f"Configuration file {config_file} not found. Using environment variables only.")
+        yaml_config = {}
+
+    config = {
+        "immich_url": str(_setting(yaml_config, "immich_url", "")).rstrip("/"),
+        "api_key": str(_setting(yaml_config, "api_key", "")),
+        "output_dir": str(_setting(yaml_config, "output_dir", "/downloads")),
+        "total_images_to_download": int(_setting(yaml_config, "total_images_to_download", 10)),
+        "person_ids": _as_list(_setting(yaml_config, "person_ids", [])),
+        "album_ids": _as_list(_setting(yaml_config, "album_ids", [])),
+        "screenshot_dimensions": [tuple(d) for d in _as_list(_setting(yaml_config, "screenshot_dimensions", []))],
+        "min_megapixels": _as_optional(_setting(yaml_config, "min_megapixels"), float),
+        "min_width": _as_optional(_setting(yaml_config, "min_width"), int),
+        "min_height": _as_optional(_setting(yaml_config, "min_height"), int),
+        "min_date": _as_date(_setting(yaml_config, "min_date")),
+        "max_date": _as_date(_setting(yaml_config, "max_date")),
+        "include_archived": _as_bool(_setting(yaml_config, "include_archived", False)),
+        "use_edited": _as_bool(_setting(yaml_config, "use_edited", True)),
+        "override": _as_bool(_setting(yaml_config, "override", False)),
+        "dry_run": _as_bool(_setting(yaml_config, "dry_run", False)),
+        "enable_heic_conversion": _as_bool(_setting(yaml_config, "enable_heic_conversion", True)),
+        "write_location_caption": _as_bool(_setting(yaml_config, "write_location_caption", False)),
+        "caption_omit_countries": _as_list(
+            _setting(yaml_config, "caption_omit_countries", ["United States of America", "United States"])
+        ),
+        "max_parallel_downloads": int(_setting(yaml_config, "max_parallel_downloads", 5)),
+        "max_validation_workers": int(_setting(yaml_config, "max_validation_workers", 4)),
+        "request_timeout": int(_setting(yaml_config, "request_timeout", 300)),
+    }
+    # Deprecated option, kept so existing configs keep working.
+    if _setting(yaml_config, "max_heic_conversion_workers") is not None:
+        logging.info("max_heic_conversion_workers is deprecated; conversion now uses max_validation_workers.")
+
+    if not config["immich_url"] or not config["api_key"]:
+        raise ValueError("Both IMMICH_URL and API_KEY must be specified, either in the YAML file or as environment variables.")
+    if config["total_images_to_download"] < 1:
+        raise ValueError("TOTAL_IMAGES_TO_DOWNLOAD must be at least 1.")
+    if config["min_date"] and config["max_date"] and config["min_date"] > config["max_date"]:
+        raise ValueError("MIN_DATE must not be after MAX_DATE.")
+
+    redacted = {**config, "api_key": "***"}
+    logging.info(f"Configuration loaded: {redacted}")
+    return config
+
 
 # ------------------------------
 # 2. Directory Management
 # ------------------------------
 
-def check_and_prepare_directory(directory, override):
+def check_directory(directory, override):
     """
-    Ensures the directory is prepared for use:
-    - If the directory doesn't exist, it is created.
-    - If the directory exists and has files:
-        - If the marker file is present, the directory is cleared.
-        - If the marker file is absent and override is enabled, the directory is cleared.
-        - If the marker file is absent and override is not enabled, the script stops.
-    - Creates a marker file to indicate the directory is managed by this script.
+    Make sure the output directory is safe to manage. A directory that already
+    contains files but no marker file is refused unless override is enabled,
+    so the script never wipes a folder it does not own.
     """
-    marker_path = os.path.join(directory, ".script_marker")
-    
     if not os.path.exists(directory):
         logging.info(f"Directory {directory} does not exist. Creating it.")
         os.makedirs(directory)
-    elif os.listdir(directory):  # Directory exists and contains files
-        if os.path.exists(marker_path):
-            logging.info("Marker file found. Clearing the directory.")
-        elif override:
-            logging.info("Marker file absent, but override enabled. Clearing the directory.")
-        else:
-            logging.error(
-                "Directory contains files, but the marker file is missing. Use --override to proceed."
-            )
-            exit(1)
-        
-        # Clear the directory
-        for filename in os.listdir(directory):
-            file_path = os.path.join(directory, filename)
-            try:
-                if os.path.isfile(file_path) or os.path.islink(file_path):
-                    os.unlink(file_path)
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-            except Exception as e:
-                logging.error(f"Failed to delete {file_path}: {e}")
+        return
 
-    # Create the marker file
+    entries = [e for e in os.listdir(directory) if e != STAGING_NAME]
+    if entries and MARKER_NAME not in entries:
+        if not override:
+            logging.error("Directory contains files, but the marker file is missing. Use --override (or OVERRIDE=true) to proceed.")
+            sys.exit(1)
+        logging.info("Marker file absent, but override enabled. Directory will be replaced.")
+
+
+def _remove_path(path):
     try:
-        with open(marker_path, "w") as f:
-            f.write("This directory is managed by the immich_downloader script.")
-        logging.info(f"Marker file created in {directory}.")
-    except Exception as e:
-        logging.error(f"Failed to create marker file in {directory}: {e}")
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+    except OSError as e:
+        logging.error(f"Failed to delete {path}: {e}")
+
+
+def prepare_staging(directory):
+    staging = os.path.join(directory, STAGING_NAME)
+    if os.path.exists(staging):
+        _remove_path(staging)
+    os.makedirs(staging)
+    return staging
+
+
+def swap_in_staging(directory, staging):
+    """Replace the previous selection with the newly downloaded one."""
+    for entry in os.listdir(directory):
+        if entry not in (STAGING_NAME, MARKER_NAME):
+            _remove_path(os.path.join(directory, entry))
+    for entry in os.listdir(staging):
+        os.replace(os.path.join(staging, entry), os.path.join(directory, entry))
+    os.rmdir(staging)
+
+    with open(os.path.join(directory, MARKER_NAME), "w") as f:
+        f.write("This directory is managed by the immich_downloader script.")
+
 
 # ------------------------------
-# 3. Asset Fetching
+# 3. Immich API
 # ------------------------------
 
-def fetch_total_assets(endpoint, asset_type, id=None):
-    """
-    Fetch total number of assets for a person, album, or general pool.
-    """
-    headers = {"x-api-key": CONFIG["api_key"]}
+class ImmichClient:
+    def __init__(self, session, config):
+        self.session = session
+        self.base_url = config["immich_url"]
+        self.headers = {"x-api-key": config["api_key"], "Accept": "application/json"}
+        self.version = (0, 0, 0)
 
-    try:
-        if asset_type == "people":
-            url = f"{endpoint}/api/{asset_type}/{id}/statistics"
-            response = requests.get(url, headers=headers)
-        elif asset_type == "albums":
-            url = f"{endpoint}/api/albums/{id}"
-            response = requests.get(url, headers=headers)
-        else:
-            url = f"{endpoint}/api/assets/statistics"
-            response = requests.get(url, headers=headers)
-
-        response.raise_for_status()
-        data = response.json()
-
-        if asset_type == "people":
-            return data.get("assets", 0)
-        elif asset_type == "albums":
-            return data.get("assetCount", 0)  # Extract the assetCount field
-        else:
-            return data.get("images", 0)
-
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching total assets for {asset_type} ID {id}: {e}")
-        return 0
-
-async def fetch_asset_from_page_async(session, endpoint, page, size=1, additional_filters=None):
-    """
-    Asynchronously fetch an asset from a specific page using the /search/metadata endpoint.
-    """
-    url = f"{endpoint}/api/search/metadata"
-    headers = {
-        "x-api-key": CONFIG["api_key"],
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "type": "IMAGE",
-        "page": page,
-        "size": size,
-    }
-
-    if additional_filters:
-        payload.update(additional_filters)
-
-    try:
-        async with session.post(url, json=payload, headers=headers) as response:
+    async def fetch_version(self):
+        async with self.session.get(f"{self.base_url}/api/server/version", headers=self.headers) as response:
             response.raise_for_status()
             data = await response.json()
-            if "assets" in data and "items" in data["assets"]:
-                return data["assets"]["items"]
-            else:
-                logging.warning(f"No items found on page {page}.")
-                return []
-    except aiohttp.ClientError as e:
-        logging.error(f"Error fetching asset from page {page}: {e}")
-        return []
+        self.version = (data.get("major", 0), data.get("minor", 0), data.get("patch", 0))
+        return self.version
 
-async def download_from_pages_async(endpoint, total_assets, total_images, output_dir, additional_filters=None):
-    """
-    Asynchronously downloads images by fetching assets page by page.
-    Reverts to sequential downloading when the remaining images to download is below the concurrency limit.
-    """
-    pages = list(range(1, total_assets + 1))
-    random.shuffle(pages)
-    downloaded = 0
-    max_parallel_downloads = CONFIG.get("max_parallel_downloads", 5)
-    semaphore = Semaphore(max_parallel_downloads)
-    lock = Lock()  # Ensure thread-safe updates to the downloaded counter
+    def build_search(self, config, person_id=None, album_id=None):
+        """Build a /search/random body for the server's API generation."""
+        min_date, max_date = config["min_date"], config["max_date"]
+        # max_date includes the whole day.
+        before = max_date + timedelta(days=1) if max_date else None
 
-    async def process_page(session, page):
-        nonlocal downloaded
-        async with semaphore:  # Limit the number of concurrent tasks
-            assets = await fetch_asset_from_page_async(
-                session, endpoint, page, size=1, additional_filters=additional_filters
-            )
-            for asset in assets:
-                async with lock:
-                    if downloaded >= total_images:
-                        return
-                # Download & validate concurrently
-                file_path = await download_and_validate_async(asset, output_dir, CONFIG)
-                if file_path:
-                    async with lock:
-                        downloaded += 1
+        if self.version >= FILTER_API_VERSION:
+            search_filter = {"type": {"eq": "IMAGE"}}
+            visibility = ["timeline", "archive"] if config["include_archived"] else ["timeline"]
+            search_filter["visibility"] = {"in": visibility}
+            if person_id:
+                search_filter["personIds"] = {"any": [person_id]}
+            if album_id:
+                search_filter["albumIds"] = {"any": [album_id]}
+            taken_at = {}
+            if min_date:
+                taken_at["gte"] = _iso(min_date)
+            if before:
+                taken_at["lt"] = _iso(before)
+            if taken_at:
+                search_filter["takenAt"] = taken_at
+            return {"filter": search_filter, "withExif": True}
 
-    async with aiohttp.ClientSession() as session:
-        while downloaded < total_images and pages:
-            # If what's left to download is less than concurrency, do it sequentially
-            if total_images - downloaded <= max_parallel_downloads:
-                for page in pages[:total_images - downloaded]:
-                    assets = await fetch_asset_from_page_async(
-                        session, endpoint, page, size=1, additional_filters=additional_filters
-                    )
-                    for asset in assets:
-                        async with lock:
-                            if downloaded >= total_images:
-                                return downloaded
-                        file_path = await download_and_validate_async(asset, output_dir, CONFIG)
-                        if file_path:
-                            async with lock:
-                                downloaded += 1
-                    pages.pop(0)  # Remove processed page
-            else:
-                # Otherwise run tasks concurrently
-                tasks = [process_page(session, page) for page in pages[:max_parallel_downloads]]
-                await asyncio.gather(*tasks)
-                pages = pages[max_parallel_downloads:]  # Remove processed pages
+        # Immich < 3.2: flat search fields.
+        body = {"type": "IMAGE", "withExif": True}
+        if not config["include_archived"]:
+            body["visibility"] = "timeline"
+        if person_id:
+            body["personIds"] = [person_id]
+        if album_id:
+            body["albumIds"] = [album_id]
+        if min_date:
+            body["takenAfter"] = _iso(min_date)
+        if before:
+            body["takenBefore"] = _iso(before)
+        return body
 
-    return downloaded
-    
+    async def random_assets(self, search, size):
+        body = {**search, "size": max(1, min(size, SEARCH_BATCH_MAX))}
+        async with self.session.post(f"{self.base_url}/api/search/random", json=body, headers=self.headers) as response:
+            if response.status >= 400:
+                detail = await response.text()
+                raise aiohttp.ClientResponseError(
+                    response.request_info, response.history, status=response.status,
+                    message=f"{response.reason}: {detail[:300]}",
+                )
+            return await response.json()
+
+    def download_url(self, asset, use_edited):
+        _, ext = os.path.splitext(asset.get("originalFileName") or "")
+        if ext.lower() in PILLOW_EXTENSIONS:
+            url = f"{self.base_url}/api/assets/{asset['id']}/original"
+            params = {}
+        else:
+            # RAW and other formats Pillow cannot read: use Immich's JPEG rendition.
+            url = f"{self.base_url}/api/assets/{asset['id']}/thumbnail"
+            params = {"size": "fullsize"}
+        if use_edited and self.version >= EDITED_PARAM_VERSION:
+            params["edited"] = "true"
+        return url, params
+
+    async def download(self, url, params, file_path):
+        tmp_path = file_path + ".part"
+        try:
+            async with self.session.get(url, params=params, headers={"x-api-key": self.headers["x-api-key"]}) as response:
+                response.raise_for_status()
+                with open(tmp_path, "wb") as f:
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        f.write(chunk)
+            os.replace(tmp_path, file_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 # ------------------------------
 # 4. Image Validation and Processing
 # ------------------------------
 
-def process_and_validate_image(file_path, config):
-    """
-    Process and validate an image file. Validates date if required, checks dimensions.
-    """
-    try:
-        logging.info(f"Processing file {file_path}.")
-        file_ext = file_path.lower().split('.')[-1]
-
-        # Step 1: Extract EXIF if required
-        exif = {}
-        if config.get("min_date") or config.get("max_date") or config.get("screenshot_dimensions"):
-            exif = _extract_exif_with_exiftool(file_path)
-
-        # Step 2: Validate date if needed
-        if config.get("min_date") or config.get("max_date"):
-            date_taken = _extract_date_from_exif(exif)
-            if not _validate_date(date_taken, file_path, config):
-                return False
-
-        # Step 3: Open image and validate dimensions if needed
-        if (
-            config.get("min_megapixels") or
-            config.get("min_width") or
-            config.get("min_height") or
-            config.get("screenshot_dimensions")
-        ):
-            with Image.open(file_path) as img:
-                width, height = img.size
-                megapixels = (width * height) / 1_000_000
-
-                # Validate dimensions and megapixels
-                if not _validate_dimensions(img, file_path, config, width, height, megapixels, exif):
-                    return False
-
-        logging.info(f"Image {file_path} passed all validation checks.")
-        return True
-
-    except Exception as e:
-        logging.error(f"Error processing image {file_path}: {e}")
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        return False
-
-def _extract_date_from_exif(exif):
-    """
-    Extract the date the picture was taken from EXIF data.
-    Returns a datetime object or None.
-    """
-    try:
-        # Attempt to find the date in common EXIF date fields
-        date_str = (
-            exif.get("DateTimeOriginal") or
-            exif.get("CreateDate") or
-            exif.get("ModifyDate") or
-            exif.get("exif:DateTimeOriginal") or
-            exif.get("exif:DateTime")
-        )
-        if date_str:
-            return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
-    except Exception as e:
-        logging.warning(f"Failed to parse date from EXIF data: {e}")
+def check_dimensions(width, height, make, config):
+    """Return the reason an image should be skipped, or None if it is acceptable."""
+    if not width or not height:
+        return None
+    if (width, height) in config["screenshot_dimensions"] and not make:
+        return f"matches screenshot dimensions {width}x{height} and has no camera make"
+    if config["min_megapixels"] and (width * height) / 1_000_000 < config["min_megapixels"]:
+        return f"below {config['min_megapixels']} megapixels ({width}x{height})"
+    if config["min_width"] and width < config["min_width"]:
+        return f"narrower than {config['min_width']}px ({width}x{height})"
+    if config["min_height"] and height < config["min_height"]:
+        return f"shorter than {config['min_height']}px ({width}x{height})"
     return None
 
-def _extract_exif_with_exiftool(file_path):
+
+def prefilter_asset(asset, config):
+    """Skip assets using Immich's metadata so they are never downloaded."""
+    exif = asset.get("exifInfo") or {}
+    width, height = exif.get("exifImageWidth"), exif.get("exifImageHeight")
+    if str(exif.get("orientation") or "") in ROTATED_ORIENTATIONS:
+        width, height = height, width
+    return check_dimensions(width, height, exif.get("make"), config)
+
+
+def location_caption(asset, config):
+    """Format Immich's reverse-geocoded location, e.g. "Boston, Massachusetts"."""
+    exif = asset.get("exifInfo") or {}
+    parts = [exif.get("city"), exif.get("state")]
+    country = exif.get("country")
+    if country and country not in config["caption_omit_countries"]:
+        parts.append(country)
+    parts = [p for i, p in enumerate(parts) if p and p not in parts[:i]]
+    return ", ".join(parts) or None
+
+
+def process_image(file_path, asset, config):
     """
-    Extract EXIF data from any image using ExifTool.
-    Returns a dictionary of EXIF fields.
+    Validate the downloaded file, convert it to JPEG if Kodi cannot display it,
+    and optionally write the location caption. Returns the final path or None.
     """
     try:
-        result = subprocess.run(
-            ["exiftool", "-json", file_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
-        )
-        exif_data = json.loads(result.stdout)
-        return exif_data[0] if exif_data else {}
-    except Exception as e:
-        logging.error(f"Error extracting EXIF data from {file_path}: {e}")
-        return {}
+        with Image.open(file_path) as img:
+            image_format = img.format
+            exif = img.getexif()
+            width, height = img.size
+            if str(exif.get(EXIF_ORIENTATION_TAG, "")) in ROTATED_ORIENTATIONS:
+                width, height = height, width
+            make = exif.get(EXIF_MAKE_TAG) or (asset.get("exifInfo") or {}).get("make")
 
-def _validate_date(date_taken, file_path, config):
-    """
-    Validate the date against min_date and max_date.
-    """
-    if not date_taken:
-        logging.warning(f"No valid date found for {file_path}, and date filtering is enabled. Discarding.")
-        os.remove(file_path)
-        return False
-
-    min_date = config.get("min_date")
-    max_date = config.get("max_date")
-
-    if min_date and date_taken < min_date:
-        logging.warning(f"Image {file_path} taken on {date_taken} is before the minimum date. Discarding.")
-        os.remove(file_path)
-        return False
-
-    if max_date and date_taken > max_date:
-        logging.warning(f"Image {file_path} taken on {date_taken} is after the maximum date. Discarding.")
-        os.remove(file_path)
-        return False
-
-    return True
-
-def _validate_dimensions(img, file_path, config, width, height, megapixels, exif):
-    """
-    Validate dimensions, megapixels, and screenshot checks.
-    """
-    # Screenshot dimensions check
-    if config.get("screenshot_dimensions"):
-        if (width, height) in [tuple(dim) for dim in config["screenshot_dimensions"]]:
-            if not exif or not exif.get("Make"):  # Fail if EXIF or 'Make' field is missing
-                logging.warning(f"Image {file_path} matches screenshot dimensions but lacks EXIF or camera 'Make' field. Discarding.")
+            reason = check_dimensions(width, height, make, config)
+            if reason:
+                logging.info(f"Skipping {asset.get('originalFileName')}: {reason}.")
                 os.remove(file_path)
-                return False
+                return None
 
-    # Minimum megapixels
-    if config.get("min_megapixels") and megapixels < config["min_megapixels"]:
-        logging.warning(f"Image {file_path} below minimum megapixels. Discarding.")
-        os.remove(file_path)
-        return False
-
-    # Minimum width and height
-    if config.get("min_width") and width < config["min_width"]:
-        logging.warning(f"Image {file_path} below minimum width. Discarding.")
-        os.remove(file_path)
-        return False
-
-    if config.get("min_height") and height < config["min_height"]:
-        logging.warning(f"Image {file_path} below minimum height. Discarding.")
-        os.remove(file_path)
-        return False
-
-    return True
-
-async def convert_heic_files_concurrently(
-    output_dir, 
-    max_workers: int
-):
-    """
-    Converts all HEIC files in the output directory to JPEG using heif-convert,
-    in parallel using a thread pool.
-    """
-    heic_files = glob.glob(os.path.join(output_dir, "*.heic"))
-    if not heic_files:
-        logging.info("No HEIC files found for conversion.")
-        return
-
-    loop = asyncio.get_running_loop()
-    def convert_single_heic(heic_path):
-        """
-        Runs heif-convert on a single file, then removes the .heic if successful.
-        """
-        jpg_path = os.path.splitext(heic_path)[0] + ".jpg"
-        
-        
-        if HEIF_CONVERT_SUPPORTS_OUTPUT_OPTION:
-            cmd = (
-                f'heif-convert -v "{heic_path}" || '
-                f'(mv "{heic_path}" "{jpg_path}")'
-            )
-        else:
-            cmd = f'heif-convert "{heic_path}" "{jpg_path}"'
-        
-        try:
-            result = os.system(cmd)
-            if not os.path.exists(jpg_path):
-                os.rename(heic_path, jpg_path)
-
-            if result == 0:
-                subprocess.run(
-                    ["exiftool", "-overwrite_original_in_place", "-Orientation=", f"{jpg_path}"],
-                    check=True
-                )
-                os.remove(heic_path)
-                logging.info(f"Converted {heic_path} to {jpg_path}")
-            else:
-                logging.error(f"HEIC to JPEG conversion failed for {heic_path}")
-        except Exception as e:
-            logging.error(f"Error during HEIC to JPEG conversion for {heic_path}: {e}")
-
-    # Create a thread pool just for this conversion
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        tasks = []
-        for heic_file in heic_files:
-            # Schedule each conversion in the thread pool
-            tasks.append(loop.run_in_executor(executor, convert_single_heic, heic_file))
-
-        # Wait for all tasks to complete
-        await asyncio.gather(*tasks)
-
-    logging.info("Concurrent HEIC conversion complete.")
-
-
-# ------------------------------
-# 5. Downloading and Saving
-# ------------------------------
-
-async def download_and_validate_async(asset, output_dir, config):
-    """
-    Downloads an asset from Immich, then offloads the CPU-bound validation to a thread pool.
-    Returns the file path if successful, None otherwise.
-    """
-    original_filename = asset.get("originalFileName", "default.jpg")
-    _, file_extension = os.path.splitext(original_filename)
-
-    file_extension = file_extension.lower()
-    if not file_extension.startswith("."):
-        file_extension = f".{file_extension}"
-
-    file_path = os.path.join(output_dir, f"{asset['id']}{file_extension}")
-    url = f"{config['immich_url']}/api/assets/{asset['id']}/original"
-    headers = {"x-api-key": config["api_key"]}
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
-                response.raise_for_status()
-
-                global supports_atomic_write
-                if supports_atomic_write:
-                    try:
-                        fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-                        with os.fdopen(fd, "wb") as f:
-                            async for chunk in response.content.iter_chunked(8192):
-                                f.write(chunk)
-                    except FileExistsError:
-                        logging.info(f"File {file_path} already exists. Skipping.")
-                        return None
+            if image_format not in KODI_FORMATS:
+                if not config["enable_heic_conversion"]:
+                    logging.info(f"Keeping {image_format} file {file_path} unconverted (conversion disabled).")
                 else:
-                    async with aiofiles.open(file_path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(8192):
-                            await f.write(chunk)
+                    file_path = _convert_to_jpeg(img, file_path)
 
-        # **Offload** validation to our shared thread pool:
-        loop = asyncio.get_running_loop()
-        # Use the global VALIDATION_EXECUTOR for concurrency
-        success = await loop.run_in_executor(
-            VALIDATION_EXECUTOR,
-            process_and_validate_image,
-            file_path,
-            config
-        )
-        return file_path if success else None
+        if config["write_location_caption"] and file_path.lower().endswith((".jpg", ".jpeg")):
+            caption = location_caption(asset, config)
+            if caption:
+                _write_caption(file_path, caption)
+
+        return file_path
 
     except Exception as e:
-        logging.error(f"Error downloading or validating asset {asset['id']}: {e}")
+        logging.error(f"Error processing {file_path}: {e}")
         if os.path.exists(file_path):
             os.remove(file_path)
         return None
+
+
+def _convert_to_jpeg(img, file_path):
+    """Convert to JPEG with the rotation applied, keeping EXIF and the colour profile."""
+    jpg_path = os.path.splitext(file_path)[0] + ".jpg"
+    icc_profile = img.info.get("icc_profile")
+    rotated = ImageOps.exif_transpose(img)
+    exif = rotated.getexif()
+    exif.pop(EXIF_ORIENTATION_TAG, None)
+    rgb = rotated.convert("RGB")
+    save_args = {"quality": 92, "exif": exif.tobytes()}
+    if icc_profile:
+        save_args["icc_profile"] = icc_profile
+    rgb.save(jpg_path + ".tmp", "JPEG", **save_args)
+    os.replace(jpg_path + ".tmp", jpg_path)
+    if jpg_path != file_path:
+        os.remove(file_path)
+    logging.info(f"Converted {os.path.basename(file_path)} to JPEG.")
+    return jpg_path
+
+
+def _write_caption(file_path, caption):
+    """Write the IPTC Caption-Abstract field, which Kodi's slideshow displays."""
+    try:
+        subprocess.run(
+            [
+                "exiftool", "-q", "-overwrite_original", "-charset", "iptc=UTF8",
+                "-IPTC:CodedCharacterSet=UTF8", f"-IPTC:Caption-Abstract={caption}",
+                f"-XMP-dc:Description={caption}", file_path,
+            ],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        logging.warning(f"Failed to write caption to {file_path}: {e.stderr.strip()}")
+
+
+# ------------------------------
+# 5. Downloading
+# ------------------------------
+
+class Downloader:
+    def __init__(self, client, config, staging_dir, executor):
+        self.client = client
+        self.config = config
+        self.staging_dir = staging_dir
+        self.executor = executor
+        self.semaphore = asyncio.Semaphore(config["max_parallel_downloads"])
+        self.seen_ids = set()  # shared across sources so overlapping people/albums are not duplicated
+
+    async def collect(self, label, search, target):
+        """Download up to `target` random images matching `search`."""
+        kept = 0
+        in_flight = 0
+        empty_rounds = 0
+        lock = asyncio.Lock()
+
+        async def handle(asset):
+            nonlocal kept, in_flight
+            async with self.semaphore:
+                async with lock:
+                    if kept + in_flight >= target:
+                        return
+                    in_flight += 1
+                ok = False
+                try:
+                    ok = await self._download_one(asset)
+                finally:
+                    async with lock:
+                        in_flight -= 1
+                        if ok:
+                            kept += 1
+
+        while kept < target and empty_rounds < MAX_EMPTY_ROUNDS:
+            needed = target - kept
+            # Ask for extra so rejected images do not each cost another round trip.
+            assets = await self.client.random_assets(search, max(needed * 3, 50))
+            candidates = []
+            for asset in assets:
+                if asset["id"] in self.seen_ids:
+                    continue
+                self.seen_ids.add(asset["id"])
+                reason = prefilter_asset(asset, self.config)
+                if reason:
+                    logging.info(f"Skipping {asset.get('originalFileName')}: {reason}.")
+                    continue
+                candidates.append(asset)
+
+            if not candidates:
+                empty_rounds += 1
+                continue
+            empty_rounds = 0
+
+            if self.config["dry_run"]:
+                for asset in candidates[:needed]:
+                    logging.info(f"[dry run] Would download {asset.get('originalFileName')} ({asset['id']}).")
+                kept += min(needed, len(candidates))
+                continue
+
+            await asyncio.gather(*(handle(asset) for asset in candidates))
+
+        if kept < target:
+            logging.warning(f"{label}: only {kept} of {target} images matched the filters.")
+        return kept
+
+    async def _download_one(self, asset):
+        url, params = self.client.download_url(asset, self.config["use_edited"])
+        ext = ".jpg" if url.endswith("/thumbnail") else os.path.splitext(asset.get("originalFileName") or "")[1].lower()
+        file_path = os.path.join(self.staging_dir, f"{asset['id']}{ext or '.jpg'}")
+        try:
+            await self.client.download(url, params, file_path)
+        except Exception as e:
+            logging.error(f"Error downloading asset {asset['id']}: {e}")
+            return False
+
+        loop = asyncio.get_running_loop()
+        final_path = await loop.run_in_executor(self.executor, process_image, file_path, asset, self.config)
+        if final_path:
+            logging.info(f"Saved {asset.get('originalFileName')} as {os.path.basename(final_path)}.")
+        return final_path is not None
+
 
 # ------------------------------
 # 6. Main Execution
 # ------------------------------
 
-def get_filesystem_type(directory):
-    """
-    Determine the filesystem type of the given directory.
-    """
+def parse_args():
+    parser = argparse.ArgumentParser(description="Download a random selection of images from Immich.")
+    parser.add_argument("--config", default=os.getenv("CONFIG_FILE", "config.yaml"), help="Path to the YAML config file")
+    parser.add_argument("--output-dir", help="Directory to save downloaded images")
+    parser.add_argument("--override", action="store_true", help="Override the safety check for the directory")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be downloaded without changing anything")
+    return parser.parse_args()
+
+
+async def run(config):
+    output_dir = config["output_dir"]
+    if not config["dry_run"]:
+        check_directory(output_dir, config["override"])
+
+    if config["write_location_caption"] and not shutil.which("exiftool"):
+        logging.warning("exiftool not found; location captions are disabled.")
+        config["write_location_caption"] = False
+
+    timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=config["request_timeout"])
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        client = ImmichClient(session, config)
+        try:
+            version = await client.fetch_version()
+        except Exception as e:
+            logging.error(f"Cannot reach Immich at {config['immich_url']}: {e}")
+            return 1
+        logging.info(f"Connected to Immich v{'.'.join(map(str, version))}.")
+
+        staging = None if config["dry_run"] else prepare_staging(output_dir)
+        total = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=config["max_validation_workers"]) as executor:
+            downloader = Downloader(client, config, staging, executor)
+            target = config["total_images_to_download"]
+
+            sources = [(f"person {pid}", {"person_id": pid}) for pid in config["person_ids"]]
+            sources += [(f"album {aid}", {"album_id": aid}) for aid in config["album_ids"]]
+            if not sources:
+                sources = [("library", {})]
+
+            for label, ids in sources:
+                logging.info(f"Selecting {target} random images from {label}.")
+                try:
+                    count = await downloader.collect(label, client.build_search(config, **ids), target)
+                except aiohttp.ClientResponseError as e:
+                    hint = " Check that the API key has the asset.read, asset.view and asset.download permissions." if e.status in (401, 403) else ""
+                    logging.error(f"Search failed for {label}: {e.status} {e.message}.{hint}")
+                    continue
+                except aiohttp.ClientError as e:
+                    logging.error(f"Search failed for {label}: {e}")
+                    continue
+                logging.info(f"{'Found' if config['dry_run'] else 'Downloaded'} {count} images from {label}.")
+                total += count
+
+    if config["dry_run"]:
+        logging.info(f"Dry run complete: {total} images would be downloaded. Nothing was changed.")
+        return 0
+
+    if total == 0:
+        logging.error("No images were downloaded; keeping the previous selection.")
+        _remove_path(staging)
+        return 1
+
+    swap_in_staging(output_dir, staging)
+    logging.info(f"Done. {total} images are now in {output_dir}.")
+    return 0
+
+
+def main():
+    args = parse_args()
+    setup_logging(os.getenv("LOG_FILE", "immich_downloader.log"))
     try:
-        result = subprocess.run(["df", "-T", directory], stdout=subprocess.PIPE, text=True, check=True)
-        lines = result.stdout.splitlines()
-        if len(lines) > 1:
-            return lines[1].split()[1]
-    except Exception as e:
-        logging.warning(f"Failed to determine filesystem type: {e}")
-    return None
+        config = load_config(args.config)
+    except (yaml.YAMLError, ValueError, json.JSONDecodeError) as e:
+        logging.error(f"Error parsing config file or environment variables: {e}")
+        sys.exit(1)
 
-async def main_async():
-    global CONFIG
-    CONFIG = load_config("config.yaml")
-    setup_logging()
+    if args.output_dir:
+        config["output_dir"] = args.output_dir
+    config["override"] = config["override"] or args.override
+    config["dry_run"] = config["dry_run"] or args.dry_run
 
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Immich Downloader Script")
-    parser.add_argument("--output-dir", type=str, help="Directory to save downloaded images")
-    parser.add_argument("--override", action="store_true", help="Override safety checks for the directory")
-    args = parser.parse_args()
+    sys.exit(asyncio.run(run(config)))
 
-    output_dir = args.output_dir or CONFIG.get("output_dir")
-    if not output_dir:
-        logging.error("Output directory not specified.")
-        return
-
-    global supports_atomic_write
-    filesystem_type = get_filesystem_type(output_dir)
-    supports_atomic_write = filesystem_type in ["nfs", "ntfs", "ext4", "xfs"]
-    logging.info(f"Filesystem type: {filesystem_type} - Supports atomic write: {supports_atomic_write}")
-
-    check_and_prepare_directory(output_dir, args.override)
-
-    # -------------
-    # NEW: Create a thread pool for concurrent CPU-bound validations
-    global VALIDATION_EXECUTOR
-    VALIDATION_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-        max_workers=CONFIG["max_validation_workers"]
-    )
-    # Tweak max_workers for your system’s CPU
-    # -------------
-
-    # Configuration parameters
-    person_ids = CONFIG.get("person_ids", [])
-    album_ids = CONFIG.get("album_ids", [])
-    total_images_per_id = CONFIG["total_images_to_download"]
-
-    # If no IDs given, download from general pool
-    if not person_ids and not album_ids:
-        logging.info("No person IDs or album IDs specified. Fetching from general pool.")
-        total_assets = fetch_total_assets(CONFIG["immich_url"], "assets")
-        if total_assets == 0:
-            logging.warning("No assets found in the general pool.")
-            return
-
-        downloaded = await download_from_pages_async(
-            CONFIG["immich_url"], total_assets, total_images_per_id, output_dir
-        )
-        logging.info(f"Downloaded {downloaded} images from the general pool.")
-    else:
-        # Person IDs
-        for person_id in person_ids:
-            logging.info(f"Processing downloads for person ID: {person_id}")
-            total_assets = fetch_total_assets(CONFIG["immich_url"], "people", person_id)
-            if total_assets == 0:
-                logging.warning(f"No assets found for person ID {person_id}.")
-                continue
-
-            downloaded = await download_from_pages_async(
-                CONFIG["immich_url"], total_assets, total_images_per_id, output_dir,
-                additional_filters={"personIds": [person_id]}
-            )
-            logging.info(f"Downloaded {downloaded} images for person ID {person_id}.")
-
-        # Album IDs
-        for album_id in album_ids:
-            logging.info(f"Processing downloads for album ID: {album_id}")
-            total_assets = fetch_total_assets(CONFIG["immich_url"], "albums", album_id)
-            if total_assets == 0:
-                logging.warning(f"No assets found for album ID {album_id}.")
-                continue
-
-            downloaded = await download_from_pages_async(
-                CONFIG["immich_url"], total_assets, total_images_per_id, output_dir,
-                additional_filters={"albumIds": [album_id]}
-            )
-            logging.info(f"Downloaded {downloaded} images for album ID {album_id}.")
-
-    # Perform HEIC -> JPEG conversion if enabled
- #   if CONFIG.get("enable_heic_conversion", True):
- #       logging.info("Starting HEIC to JPEG conversion for downloaded images.")
- #       convert_heic_files(output_dir)
-
-    if CONFIG.get("enable_heic_conversion", True):
-        heif_convert_available = check_heif_convert_support()
-        if not heif_convert_available:
-            CONFIG["enable_heic_conversion"] = False
-
-    if CONFIG.get("enable_heic_conversion", True):
-        logging.info("Starting concurrent HEIC to JPEG conversion for downloaded images.")
-        await convert_heic_files_concurrently(CONFIG["output_dir"], max_workers=CONFIG["max_heic_conversion_workers"])
-
-    # Cleanup the thread pool
-    VALIDATION_EXECUTOR.shutdown(wait=True)
-    logging.info("Validation thread pool shut down.")
 
 if __name__ == "__main__":
-    asyncio.run(main_async())
+    main()

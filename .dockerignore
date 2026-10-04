@@ -1,0 +1,5 @@
+.git
+config.yaml
+downloads
+*.log
+*.log.*
