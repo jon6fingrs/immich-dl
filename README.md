@@ -110,6 +110,16 @@ To use a YAML file instead of environment variables, mount it and point `CONFIG_
       - ./downloads:/downloads
 ```
 
+### Image publishing
+
+A GitHub Actions workflow (`.github/workflows/docker-publish.yml`) builds the image for `linux/amd64` and `linux/arm64` and pushes it to Docker Hub. Tags:
+
+- `latest` on every merge to `main`
+- `1.2.3` and `1.2` when a `v1.2.3` tag is pushed
+- `sha-<commit>` for every published build
+
+Pull requests are built as a check but not pushed. Publishing needs the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
+
 ### Building the image locally
 
 ```bash
