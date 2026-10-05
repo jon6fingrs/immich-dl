@@ -76,6 +76,8 @@ Any option can be overridden with an environment variable.
 
 The prebuilt image is on Docker Hub: [thehelpfulidiot/immich-dl](https://hub.docker.com/r/thehelpfulidiot/immich-dl).
 
+Use `latest` to follow updates, or pin a version such as `thehelpfulidiot/immich-dl:2.0`. Version 2.0 is the first release for the current Immich API (v2.0+, including v3.2+) and changes some defaults (see [#2](https://github.com/jon6fingrs/immich-dl/pull/2)).
+
 ### `docker run`
 
 ```bash
@@ -109,6 +111,16 @@ To use a YAML file instead of environment variables, mount it and point `CONFIG_
       - ./config.yaml:/config/config.yaml:ro
       - ./downloads:/downloads
 ```
+
+### Image publishing
+
+A GitHub Actions workflow (`.github/workflows/docker-publish.yml`) builds the image for `linux/amd64` and `linux/arm64` and pushes it to Docker Hub. Tags:
+
+- `latest` on every merge to `main`
+- `1.2.3` and `1.2` when a `v1.2.3` tag is pushed
+- `sha-<commit>` for every published build
+
+To release a new version, bump `__version__` in `immich-dl.py`, merge, then push a matching tag (`git tag v2.0.1 && git push origin v2.0.1`). Pull requests are built as a check but not pushed. Publishing needs the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
 
 ### Building the image locally
 
