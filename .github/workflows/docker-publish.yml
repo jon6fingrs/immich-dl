@@ -1,7 +1,9 @@
 name: Docker image
 
 # Builds the image on every pull request (as a check) and publishes it to
-# Docker Hub when main changes or a version tag (v1.2.3) is pushed.
+# Docker Hub when main changes or a version tag (v1.2.3) is pushed. Images
+# from main are tagged latest plus the __version__ in immich-dl.py (e.g. 2.0.0
+# and 2.0), so a release is: bump __version__ and merge.
 # Requires the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets.
 
 on:
@@ -23,6 +25,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Read version
+        id: version
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' immich-dl.py)
+          if [ -z "$version" ]; then echo "::error::__version__ not found in immich-dl.py"; exit 1; fi
+          echo "full=$version" >> "$GITHUB_OUTPUT"
+          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-qemu-action@v4
 
       - uses: docker/setup-buildx-action@v4
@@ -41,6 +51,8 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.full }},enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.minor }},enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
