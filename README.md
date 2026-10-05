@@ -116,11 +116,11 @@ To use a YAML file instead of environment variables, mount it and point `CONFIG_
 
 A GitHub Actions workflow (`.github/workflows/docker-publish.yml`) builds the image for `linux/amd64` and `linux/arm64` and pushes it to Docker Hub. Tags:
 
-- `latest` on every merge to `main`
+- `latest`, plus the version from `__version__` in `immich-dl.py` (e.g. `2.0.0` and `2.0`), on every merge to `main`
 - `1.2.3` and `1.2` when a `v1.2.3` tag is pushed
 - `sha-<commit>` for every published build
 
-To release a new version, bump `__version__` in `immich-dl.py`, merge, then push a matching tag (`git tag v2.0.1 && git push origin v2.0.1`). Pull requests are built as a check but not pushed. Publishing needs the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
+To release a new version, bump `__version__` in `immich-dl.py` and merge. The workflow can also be re-run from the Actions tab. Pull requests are built as a check but not pushed. Publishing needs the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
 
 ### Building the image locally
 
