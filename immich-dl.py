@@ -28,6 +28,8 @@ from pillow_heif import register_heif_opener
 
 register_heif_opener()
 
+__version__ = "2.0.0"
+
 MARKER_NAME = ".script_marker"
 STAGING_NAME = ".immich-dl-staging"
 
@@ -516,6 +518,7 @@ def parse_args():
     parser.add_argument("--output-dir", help="Directory to save downloaded images")
     parser.add_argument("--override", action="store_true", help="Override the safety check for the directory")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be downloaded without changing anything")
+    parser.add_argument("--version", action="version", version=f"immich-dl {__version__}")
     return parser.parse_args()
 
 
@@ -580,6 +583,7 @@ async def run(config):
 def main():
     args = parse_args()
     setup_logging(os.getenv("LOG_FILE", "immich_downloader.log"))
+    logging.info(f"immich-dl {__version__}")
     try:
         config = load_config(args.config)
     except (yaml.YAMLError, ValueError, json.JSONDecodeError) as e:
