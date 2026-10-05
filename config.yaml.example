@@ -1,72 +1,72 @@
-# Immich Downloader Configuration Example
-# Annotated with placeholders, examples, and alternative environment variable names for all options.
+# Immich Downloader configuration example.
+# Every option can also be set as an environment variable with the same name
+# in upper case (e.g. immich_url -> IMMICH_URL). Environment variables win.
 
-# URL of your Immich instance
-# Alternative: IMMICH_URL environment variable
-immich_url: "http://your-immich-instance-url"
+# URL of your Immich server (required)
+immich_url: "http://your-immich-server:2283"
 
-# API Key for Immich authentication
-# Alternative: API_KEY environment variable
+# Immich API key (required). Create it under Account Settings > API Keys.
+# Minimum permissions: asset.read, asset.view, asset.download
 api_key: "your-immich-api-key"
 
-# Directory to save downloaded images
-# Alternative: OUTPUT_DIR environment variable
+# Folder the images are saved to. Its contents are replaced on every run.
 output_dir: "/path/to/output/directory"
 
-# Number of images to download per album or person
-# Alternative: TOTAL_IMAGES_TO_DOWNLOAD environment variable
+# Images to download per person and per album, or from the whole library
+# when no person or album IDs are given.
 total_images_to_download: 10
 
-# List of person IDs to download images for
-# Alternative: PERSON_IDS environment variable (as a JSON-encoded array)
-# Example: PERSON_IDS='["person-id-1", "person-id-2"]'
+# Person IDs (open the person in Immich; the ID is the last part of the URL)
+# As an environment variable: PERSON_IDS='["person-id-1", "person-id-2"]'
 person_ids: []
 
-# List of album IDs to download images for
-# Alternative: ALBUM_IDS environment variable (as a JSON-encoded array)
-# Example: ALBUM_IDS='["album-id-1", "album-id-2"]'
+# Album IDs (open the album in Immich; the ID is the last part of the URL)
+# As an environment variable: ALBUM_IDS='["album-id-1", "album-id-2"]'
 album_ids: []
 
-# Minimum megapixels for downloaded images
-# Alternative: MIN_MEGAPIXELS environment variable
-# If not specified, this filter is not applied.
+# Size filters (optional; remove or set to null to disable).
+# Width and height are measured after rotation, so portrait photos count as portrait.
 min_megapixels: 2.0
+min_width: 1024
+min_height: 768
 
-# Minimum dimensions for images
-min_width: 1024      # Set to null or remove this line to disable the width check
-min_height: 768      # Set to null or remove this line to disable the height check
-
-# Screenshot dimensions to exclude
-# Alternative: SCREENSHOT_DIMENSIONS environment variable (as a JSON-encoded array of [width, height] pairs)
-# Example: SCREENSHOT_DIMENSIONS='[[1170, 2532], [1920, 1080]]'
+# Images with these exact dimensions and no camera make are treated as
+# screenshots and skipped.
+# As an environment variable: SCREENSHOT_DIMENSIONS='[[1170, 2532], [1920, 1080]]'
 screenshot_dimensions:
-  - [1170, 2532]  # iPhone screenshot dimensions
-  - [1920, 1080]  # Common desktop screenshot dimensions
+  - [1170, 2532]  # iPhone screenshot
+  - [1920, 1080]  # desktop screenshot
 
-# Enable dry-run mode to simulate downloads without saving any files
-# Alternative: DRY_RUN environment variable
-# Default: false
-dry_run: false
+# Only include photos taken in this date range (optional, YYYY-MM-DD, both inclusive).
+# Filtering happens on the Immich server, so nothing outside the range is downloaded.
+min_date: "2020-01-01"
+max_date: "2025-12-31"
 
-# Maximum number of parallel downloads
-# Alternative: MAX_PARALLEL_DOWNLOADS environment variable
-# Default: 5
-max_parallel_downloads: 5
+# Also pick from archived photos (default: false)
+include_archived: false
 
-# Override safety checks for the current run
-# **Alternative**: OVERRIDE environment variable or --override commandline flag
-# **Purpose**: Temporarily bypasses the safety check, allowing the script to clear the directory
-# even if the marker file is missing.
-# Useful for ad-hoc operations without changing the permanent safety check setting.
-override: false
+# Download the edited version of photos edited in Immich (Immich 2.5+, default: true)
+use_edited: true
 
-# Enable or disable HEIC to JPEG conversion
+# Convert HEIC/AVIF/WebP/TIFF to JPEG so Kodi can show them (default: true)
 enable_heic_conversion: true
 
-# Can add min or max dates. Will check based off EXIF data, first the date taken, or second, if unavailable, the date created.
-min_date: "2020-01-01"  # Minimum date in YYYY-MM-DD format
-max_date: "2025-01-01"  # Maximum date in YYYY-MM-DD format
+# Write the photo's location (from Immich's reverse geocoding) into the IPTC
+# caption, which Kodi's Picture Slideshow screensaver displays (default: false).
+# Requires exiftool. Countries in caption_omit_countries are left out of the caption.
+write_location_caption: false
+caption_omit_countries: ["United States of America", "United States"]
 
-#works for validating images and converting heic
+# Concurrency
+max_parallel_downloads: 5
 max_validation_workers: 4
-max_heic_conversion_workers: 4
+
+# Seconds to wait for data from Immich before giving up on a request
+request_timeout: 300
+
+# Replace the contents of output_dir even if it was not created by this script
+# (also: --override). Only needed the first time you point it at an existing folder.
+override: false
+
+# Log what would be downloaded without changing anything (also: --dry-run)
+dry_run: false

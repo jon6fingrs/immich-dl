@@ -1,7 +1,4 @@
-requests
-Pillow
-PyYAML
-aiohttp
-aiofiles
-pillow-heif
-piexif
+aiohttp>=3.9
+Pillow>=10.0
+pillow-heif>=0.16
+PyYAML>=6.0

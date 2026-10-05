@@ -1,0 +1,5 @@
+config.yaml
+downloads/
+*.log
+*.log.*
+__pycache__/

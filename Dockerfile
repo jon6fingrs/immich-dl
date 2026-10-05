@@ -1,36 +1,21 @@
-# Use Python base image
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-# Set working directory
 WORKDIR /app
 
-# Set default environment variables
-ENV OUTPUT_DIR="/downloads"
-ENV TOTAL_IMAGES_TO_DOWNLOAD=10
-ENV OVERRIDE=false
-ENV MAX_PARALLEL_DOWNLOADS=5
-ENV DRY_RUN=false
+ENV OUTPUT_DIR="/downloads" \
+    PYTHONUNBUFFERED=1
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    libjpeg-dev \
-    zlib1g-dev \
-    libheif-dev \ 
-    libheif-examples \ 
-    imagemagick \
-    libimage-exiftool-perl \
+# exiftool writes the optional location captions. HEIC/AVIF decoding comes
+# from the pillow-heif wheel, so no system image libraries are needed.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libimage-exiftool-perl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+COPY immich-dl.py .
 
-# Ensure output directory exists
 RUN mkdir -p /downloads
 
-# Set default command
 CMD ["python3", "immich-dl.py"]
